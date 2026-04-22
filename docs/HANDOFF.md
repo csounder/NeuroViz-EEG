@@ -2,6 +2,10 @@
 
 This document summarizes the React/Next.js migration and related work, and includes a **prompt** you can paste into a new Cursor chat to resume.
 
+## Canonical Git remote
+
+- **NeuroViz-EEG** (Next.js + `server-enhanced.js` Cursor-era snapshot): [https://github.com/csounder/NeuroViz-EEG](https://github.com/csounder/NeuroViz-EEG)
+
 ---
 
 ## Project overview
@@ -70,7 +74,7 @@ This document summarizes the React/Next.js migration and related work, and inclu
 ## Continuation prompt (paste into a new Cursor chat)
 
 ```
-Project: NeuroVis at /Users/richardboulanger/dB-Studio/NeuroVis. Next.js app in web/ (port 3001), API/WebSocket/OSC from server-enhanced.js (port 3000, WS 8080).
+Project: NeuroVis — GitHub https://github.com/csounder/NeuroViz-EEG (local path may be /Users/richardboulanger/dB-Studio/NeuroVis). Next.js app in web/ (port 3001), API/WebSocket/OSC from server-enhanced.js (port 3000, WS 8080).
 
 Read first: web/lib/store.ts, web/lib/clientSim.ts, web/lib/simulator.ts, web/components/charts/BandTracesChart.tsx, web/lib/bandTraceDb.ts, web/lib/displays.tsx, web/components/shell/Sidebar.tsx, web/components/shell/TopBar.tsx. Repo handoff: docs/HANDOFF.md.
 
