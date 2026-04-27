@@ -180,6 +180,31 @@ class ExponentialSmoother {
 }
 
 // ============================================================================
+// RUNNING 3-POINT MEDIAN (impulse / spike suppression; common lightweight step)
+// ============================================================================
+
+class RunningMedian3 {
+  constructor(numChannels = 8) {
+    this.bufs = Array(numChannels)
+      .fill(null)
+      .map(() => []);
+  }
+
+  push(channelIndex, sample) {
+    const b = this.bufs[channelIndex];
+    b.push(sample);
+    if (b.length > 3) b.shift();
+    if (b.length < 3) return sample;
+    const s = [b[0], b[1], b[2]].sort((a, c) => a - c);
+    return s[1];
+  }
+
+  reset() {
+    this.bufs.forEach((b) => (b.length = 0));
+  }
+}
+
+// ============================================================================
 // DSP PIPELINE
 // ============================================================================
 
@@ -200,18 +225,32 @@ class DSPPipeline {
     this.useRectify = false;
     this.smoothingTimeConstantMs = options.smoothingTimeConstantMs || 100;
     this.scaling = options.scaling || "0-1";
+    this.notchHz = options.notchHz === 50 || options.notchHz === 60 ? options.notchHz : 60;
+    this.bandpassLo = Math.min(
+      55,
+      Math.max(0.5, Number(options.bandpassLo) || 1),
+    );
+    this.bandpassHi = Math.min(
+      80,
+      Math.max(
+        this.bandpassLo + 1,
+        Number(options.bandpassHi) || 45,
+      ),
+    );
+    this.useMedian3 = options.applyMedian3 === true;
+    this.median3 = new RunningMedian3(8);
 
     // Create filters
-    this.notchFilter = new BiquadFilter("notch", 60, this.sampleRate, 1.0);
+    this.notchFilter = new BiquadFilter("notch", this.notchHz, this.sampleRate, 1.0);
     this.highpassFilter = new BiquadFilter(
       "highpass",
-      1,
+      this.bandpassLo,
       this.sampleRate,
       0.707,
     );
     this.lowpassFilter = new BiquadFilter(
       "lowpass",
-      45,
+      this.bandpassHi,
       this.sampleRate,
       0.707,
     );
@@ -268,20 +307,27 @@ class DSPPipeline {
       processed = processed.map((sample) => sample - mean);
     }
 
-    // STEP 2: Notch filter (60 Hz power line interference)
+    // STEP 2: Notch filter (50/60 Hz mains)
     if (this.useNotchFilter) {
       processed = processed.map((sample, ch) =>
         this.notchFilter.apply(sample, ch),
       );
     }
 
-    // STEP 3: Bandpass filter (1-45 Hz brain rhythms)
+    // STEP 3: Bandpass (Butterworth-style biquad cascade; edges configurable)
     if (this.useBandpassFilter) {
       processed = processed.map((sample, ch) => {
         let filtered = this.highpassFilter.apply(sample, ch);
         filtered = this.lowpassFilter.apply(filtered, ch);
         return filtered;
       });
+    }
+
+    // STEP 3b: 3-point median — short impulse rejection (used in many embedded pipelines)
+    if (this.useMedian3) {
+      processed = processed.map((sample, ch) =>
+        this.median3.push(ch, sample),
+      );
     }
 
     // STEP 4: Exponential smoothing (reduce jitter)
@@ -444,6 +490,53 @@ class DSPPipeline {
     }
     if (newConfig.applyBandpass !== undefined) {
       this.useBandpassFilter = newConfig.applyBandpass;
+    }
+
+    if (newConfig.notchHz !== undefined) {
+      const hz =
+        newConfig.notchHz === 50 || newConfig.notchHz === 60
+          ? newConfig.notchHz
+          : this.notchHz;
+      if (hz !== this.notchHz) {
+        this.notchHz = hz;
+        this.notchFilter = new BiquadFilter("notch", hz, this.sampleRate, 1.0);
+      }
+    }
+
+    if (
+      newConfig.bandpassLo !== undefined ||
+      newConfig.bandpassHi !== undefined
+    ) {
+      const lo =
+        newConfig.bandpassLo !== undefined
+          ? Math.min(55, Math.max(0.5, Number(newConfig.bandpassLo)))
+          : this.bandpassLo;
+      const hiRaw =
+        newConfig.bandpassHi !== undefined
+          ? Number(newConfig.bandpassHi)
+          : this.bandpassHi;
+      const hi = Math.min(80, Math.max(lo + 1, hiRaw));
+      if (lo !== this.bandpassLo || hi !== this.bandpassHi) {
+        this.bandpassLo = lo;
+        this.bandpassHi = hi;
+        this.highpassFilter = new BiquadFilter(
+          "highpass",
+          lo,
+          this.sampleRate,
+          0.707,
+        );
+        this.lowpassFilter = new BiquadFilter(
+          "lowpass",
+          hi,
+          this.sampleRate,
+          0.707,
+        );
+      }
+    }
+
+    if (newConfig.applyMedian3 !== undefined) {
+      this.useMedian3 = Boolean(newConfig.applyMedian3);
+      if (!this.useMedian3) this.median3.reset();
     }
 
     // Shape processor toggles

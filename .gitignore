@@ -17,6 +17,7 @@ yarn-error.log*
 # OS
 .DS_Store
 Thumbs.db
+*.pages
 
 # IDE
 .vscode/
@@ -38,3 +39,7 @@ public/app.js.working-backup
 # Runtime
 *.pid
 *.seed
+
+# Python
+__pycache__/
+*.pyc

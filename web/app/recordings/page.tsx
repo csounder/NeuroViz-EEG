@@ -63,7 +63,7 @@ export default function RecordingsPage() {
     if (rec) {
       setExpanded(rec.id);
       // Offer downloads immediately
-      setTimeout(() => downloadRecordingFiles(rec), 250);
+      setTimeout(() => downloadRecordingFiles(rec, { preMs: 2000, postMs: 2000 }), 250);
     }
   };
   const addAnnotation = () => {
@@ -79,7 +79,7 @@ export default function RecordingsPage() {
         <CardHeader>
           <CardTitle
             icon={<Circle className="h-4 w-4" />}
-            description="Captures raw EEG (4 channels) · band powers (5 bands × abs + rel) · motion · brain state · artifact flag · annotations"
+            description="Captures raw EEG (4 columns by default; 8 or 16 for OpenBCI Cyton/Daisy when the device name matches) · band powers (5 bands × abs + rel) · motion · brain state · artifact flag · annotations"
           >
             {status.recording ? "Recording…" : "New session"}
           </CardTitle>
@@ -160,8 +160,8 @@ export default function RecordingsPage() {
             </div>
             <ul className="grid grid-cols-1 gap-x-5 gap-y-0.5 sm:grid-cols-2">
               <li>
-                <span className="text-zinc-300">eeg.csv</span> — t_ms, ch1–ch4
-                (µV), artifact flag
+                <span className="text-zinc-300">eeg.csv</span> — t_ms, wall_ms,
+                eeg_1…eeg_N (µV) per manifest channels, artifact flag
               </li>
               <li>
                 <span className="text-zinc-300">bands.csv</span> — t_ms, rel &
@@ -305,7 +305,7 @@ function RecordingRow({
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => downloadRecordingFiles(rec)}
+                onClick={() => downloadRecordingFiles(rec, { preMs: 2000, postMs: 2000 })}
                 leftIcon={<Download className="h-3.5 w-3.5" />}
               >
                 All

@@ -5,7 +5,11 @@ import { Rows3 } from "lucide-react";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { BandTracesChart } from "@/components/charts/BandTracesChart";
 import { BandSelector } from "@/components/widgets/BandSelector";
-import { ScaleControl, type ScaleState } from "@/components/ui/ScaleControl";
+import {
+  ScaleControl,
+  TraceSpeedControl,
+  type ScaleState,
+} from "@/components/ui/ScaleControl";
 import { BAND_NAMES, type BandName } from "@/lib/types";
 
 export default function BandsMultichannelPage() {
@@ -14,6 +18,7 @@ export default function BandsMultichannelPage() {
     auto: true,
     value: 12,
   });
+  const [traceWindow, setTraceWindow] = React.useState(256);
 
   return (
     <div className="space-y-6">
@@ -34,18 +39,27 @@ export default function BandsMultichannelPage() {
             height={520}
             autoScale={scale.auto}
             scaleValue={scale.value}
+            windowSamples={traceWindow}
           />
-          <ScaleControl
-            state={scale}
-            onChange={setScale}
-            label="dB span"
-            unit="dB"
-            bipolar
-            min={3}
-            max={40}
-            helpAuto="Each strip auto-fits its dB min/max (Mind Monitor–style levels)."
-            helpManual="Fixed ±dB half-span per strip; same sensitivity on every band row."
-          />
+          <div className="flex flex-col gap-2 lg:flex-row">
+            <ScaleControl
+              className="flex-1"
+              state={scale}
+              onChange={setScale}
+              label="dB span"
+              unit="dB"
+              bipolar
+              min={3}
+              max={40}
+              helpAuto="Each strip auto-fits its dB min/max (Mind Monitor–style levels)."
+              helpManual="Fixed ±dB half-span per strip; same sensitivity on every band row."
+            />
+            <TraceSpeedControl
+              className="flex-1"
+              value={traceWindow}
+              onChange={setTraceWindow}
+            />
+          </div>
         </CardBody>
       </Card>
 

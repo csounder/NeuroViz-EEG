@@ -1,0 +1,31 @@
+NeuroVis - How it works
+
+What every app actually does for OSC:
+
+OpenBCI GUI — Processing (Java) app, uses Java's oscP5 for native UDP. Not a browser at all.
+
+OpenBCI Hub — Electron app. Node.js with dgram for native UDP. This is how they "send OSC from a browser" — it's Electron, not a real browser.
+
+NeurOSC — Python server using python-osc for UDP.
+osc-js — explicitly documents: browser → WebSocket → Node.js bridge → UDP. Browser alone can't do it.
+
+The Electron approach (same as OpenBCI) is the right answer. Put all files in one folder and run:
+
+
+npm install
+npm start
+
+That's it. Electron opens a native Mac window running your full NeuroVis app, and Node.js dgram sends real UDP OSC packets directly — no bridge, no server, no Python. The main.js file encodes proper OSC binary format (address string + "ffff" type tag + float32 args) and sends via UDP socket.
+
+How it works internally:
+
+main.js — Electron main process, creates UDP socket via dgram.createSocket('udp4'), handles osc-send and osc-send-batch IPC calls
+
+preload.js — exposes window.neurovisOSC.send() and .sendBatch() to the renderer securely via contextBridge
+neurovis.html — detects window.neurovisOSC.isElectron, if true, sends OSC directly via IPC at your configured rate. No fetch, no WebSocket, no bridge.
+
+The app auto-detects its runtime:
+Electron: shows "✓ Electron App — Native UDP OSC (no bridge needed)" in green. Real packets go out.
+Python server: shows "✓ Python Server Connected". The server handles UDP.
+
+Standalone browser: shows "Standalone Mode — No OSC Output". Everything else works; OSC Monitor shows what would be sent.

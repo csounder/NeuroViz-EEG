@@ -2,7 +2,7 @@
 
 // Client-side DSP pipeline.
 //
-// Mirrors NeurOSC's chain so every toggle has a visible effect:
+// Browser-side chain (detrend → CAR → bandpass → notch → EMA → optional z-score on features):
 //
 //   Raw  →  Detrend (DC/drift)
 //         →  CAR     (spatial — subtract mean across channels)

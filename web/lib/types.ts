@@ -1,5 +1,11 @@
 // Shared TypeScript types mirroring the server-enhanced.js WebSocket & REST contract.
 
+/**
+ * What drives per-sample EEG in browser charts and the band-pass trace bank.
+ * Band power messages (`bandPowers`) are always from the server unless you use clientSim.
+ */
+export type EegTraceSource = "server_dsp" | "device_raw" | "browser_dsp";
+
 export type BandName = "delta" | "theta" | "alpha" | "beta" | "gamma";
 
 export const BAND_NAMES: BandName[] = [
@@ -41,6 +47,7 @@ export interface BandPowerMessage {
   type: "bandPowers";
   absolute: BandPowers;
   relative: BandPowers;
+  timestamp?: number;
 }
 
 export interface MotionMessage {
@@ -58,6 +65,13 @@ export interface TouchingMessage {
   type: "touching";
   value: boolean;
   status?: string;
+}
+
+export interface MindMonitorOscMessage {
+  type: "mindMonitorOsc";
+  address: string;
+  args: unknown[];
+  timestamp: number;
 }
 
 export interface DeviceInfo {
@@ -126,6 +140,15 @@ export interface BluetoothMessage {
   [k: string]: unknown;
 }
 
+/** Server → browser: log a research marker (same clock as HTTP /api/research-event). */
+export interface ResearchEventBridgeMessage {
+  type: "research_event";
+  label: string;
+  detail?: string;
+  source?: "http" | "bridge";
+  wallMs?: number;
+}
+
 export type ServerMessage =
   | InitMessage
   | EEGMessage
@@ -133,12 +156,14 @@ export type ServerMessage =
   | MotionMessage
   | BatteryMessage
   | TouchingMessage
+  | MindMonitorOscMessage
   | DeviceListMessage
   | SettingsMessage
   | CalibrationStatusMessage
   | InstrumentStatusMessage
   | RecordingCompleteMessage
   | BluetoothMessage
+  | ResearchEventBridgeMessage
   | { type: string; [k: string]: unknown };
 
 export interface NeuroVisSettings {
@@ -152,6 +177,8 @@ export interface NeuroVisSettings {
   oscStreams?: {
     rawEEG?: boolean;
     bandPowers?: boolean;
+    /** MuseIO `/elements/raw_fft0`…`3` (129 floats) — Mind Monitor compatibility. */
+    rawFft?: boolean;
     motion?: boolean;
     ppg?: boolean;
     fnirs?: boolean;

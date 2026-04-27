@@ -1,0 +1,238 @@
+NeuroVis EEG → TouchDesigner OSC Test
+======================================
+
+SETUP INSTRUCTIONS:
+1. Open TouchDesigner
+2. Create the network below (copy-paste the sections marked with >)
+3. Start NeuroVis and enable OSC on port 7400
+4. Watch live EEG values control visuals
+
+===================================================================
+NETWORK LAYOUT
+===================================================================
+
+[OSC In] → [Select] → [CHOP to] → [Null] → [Visualization]
+   ↓
+[Table]
+
+===================================================================
+STEP 1: Create OSC In DAT
+===================================================================
+
+> Create a OSC In DAT operator
+  - Name: oscin1
+  - Network Port: 7400
+  - Active: ON
+
+This will receive all OSC messages from NeuroVis on port 7400.
+
+===================================================================
+STEP 2: Create Select DAT
+===================================================================
+
+> Create a Select DAT operator
+  - Name: select_eeg
+  - DAT: oscin1
+  - Row Name/Number: * (all rows)
+  - Column Name/Number: * (all columns)
+
+This filters and organizes the incoming OSC data.
+
+===================================================================
+STEP 3: Create DAT to CHOP
+===================================================================
+
+> Create a DAT to CHOP operator
+  - Name: datto1
+  - DAT: select_eeg
+  - Output: Column per Channel
+  - First Row is: Names
+  - First Column is: Names
+
+This converts the OSC data table to CHOP channels for animation.
+
+===================================================================
+STEP 4: Create Null CHOP (for organization)
+===================================================================
+
+> Create a Null CHOP operator
+  - Name: null_eeg
+  - Input: datto1
+
+This organizes the channels and makes them easy to reference.
+
+===================================================================
+STEP 5: Create Info DAT (for monitoring)
+===================================================================
+
+> Create an Info DAT operator
+  - Name: info1
+  - CHOP: null_eeg
+
+This shows all channel names and values for debugging.
+
+===================================================================
+STEP 6: Visualize with Sphere (ALPHA CONTROL)
+===================================================================
+
+> Create a Geometry COMP
+  - Name: geo1
+
+> Inside geo1, create a Sphere SOP
+  - Name: sphere1
+
+> Create a Transform SOP
+  - Name: transform1
+  - Input: sphere1
+  - Translate Y: absout.chan('/project1/null_eeg:eeg_alpha_averages')
+  - Uniform Scale: 1 + absout.chan('/project1/null_eeg:eeg_alpha_averages')
+
+This makes the sphere move up and scale based on alpha waves!
+
+===================================================================
+STEP 7: Color Control (GAMMA)
+===================================================================
+
+> Inside geo1, create a Material SOP
+  - Name: mat1
+  - Input: transform1
+  - Diffuse Color R: absout.chan('/project1/null_eeg:eeg_gamma_averages')
+  - Diffuse Color G: 0.5
+  - Diffuse Color B: 1.0 - absout.chan('/project1/null_eeg:eeg_gamma_averages')
+
+This changes sphere color from cyan to magenta based on gamma!
+
+===================================================================
+STEP 8: Create Render Camera
+===================================================================
+
+> Create a Camera COMP
+  - Name: cam1
+  - Translate Z: 3
+
+> Create a Render TOP
+  - Name: render1
+  - Geometry: /project1/geo1
+  - Camera: /project1/cam1
+
+This renders the 3D scene.
+
+===================================================================
+STEP 9: Monitor Channels (TEXT TOP)
+===================================================================
+
+> Create a Text TOP
+  - Name: text1
+  - Text: (use expressions below)
+
+Expression for live EEG display:
+```
+'Alpha: %.3f' % absout.chan('/project1/null_eeg:eeg_alpha_averages') + '\n' +
+'Beta: %.3f' % absout.chan('/project1/null_eeg:eeg_beta_averages') + '\n' +
+'Theta: %.3f' % absout.chan('/project1/null_eeg:eeg_theta_averages') + '\n' +
+'Delta: %.3f' % absout.chan('/project1/null_eeg:eeg_delta_averages') + '\n' +
+'Gamma: %.3f' % absout.chan('/project1/null_eeg:eeg_gamma_averages')
+```
+
+> Create an Over TOP
+  - Input 1: render1
+  - Input 2: text1
+  - Blend Mode: Over
+
+This overlays text on the rendered scene.
+
+===================================================================
+ADVANCED: Multi-Channel Sphere Grid
+===================================================================
+
+For a more advanced visualization, create 20 spheres (4 channels × 5 bands):
+
+> Create a Copy SOP with Grid arrangement
+  - Number X: 4 (channels)
+  - Number Y: 5 (bands)
+  - Size X: 0.5
+  - Size Y: 0.5
+
+> Use CHOP Execute DAT to map each sphere to its EEG value:
+
+```python
+def onValueChange(channel, sampleIndex, val, prev):
+    # Map each sphere to its corresponding EEG channel
+    # Example: sphere[0,0] = CH1 Delta
+    #          sphere[0,1] = CH1 Theta
+    #          sphere[1,0] = CH2 Delta
+    # etc.
+    pass
+```
+
+===================================================================
+AVAILABLE OSC CHANNELS (from NeuroVis)
+===================================================================
+
+Absolute Power (per channel, per band):
+- /eeg/CH1/delta/absolute
+- /eeg/CH1/theta/absolute
+- /eeg/CH1/alpha/absolute
+- /eeg/CH1/beta/absolute
+- /eeg/CH1/gamma/absolute
+- ... (repeat for CH2, CH3, CH4)
+
+Relative Power (per channel, per band):
+- /eeg/CH1/delta/relative
+- /eeg/CH1/theta/relative
+- ... (etc.)
+
+Averages (across all channels):
+- /eeg/delta/averages
+- /eeg/theta/averages
+- /eeg/alpha/averages
+- /eeg/beta/averages
+- /eeg/gamma/averages
+
+All values are floats in range 0.0 to 1.0.
+
+===================================================================
+TIPS & TRICKS
+===================================================================
+
+1. SMOOTH VALUES: Add a Filter CHOP after datto1
+   - Set Filter Width: 10-30 samples for smoothing
+
+2. SCALE VALUES: Add a Math CHOP
+   - From Range: 0 to 1
+   - To Range: custom (e.g., 0 to 10 for bigger movements)
+
+3. TRIGGER EVENTS: Use a Logic CHOP
+   - Threshold: 0.7 (trigger when alpha > 0.7)
+   - Use for particle bursts, color changes, etc.
+
+4. RECORD DATA: Right-click null_eeg → Export CHOP
+   - Save EEG data as .chan file for later playback
+
+5. AUDIO REACTIVE: Combine EEG with Audio File In
+   - Multiply audio levels by beta for music + brain control
+
+===================================================================
+TROUBLESHOOTING
+===================================================================
+
+Q: Not receiving OSC messages?
+A: Check that NeuroVis OSC port matches (7400)
+   Check firewall settings
+   Make sure "Active" is ON in oscin1
+
+Q: Values stuck at 0?
+A: Check the Info DAT to see all channels
+   Verify NeuroVis is streaming (check browser console)
+
+Q: Values jumping around wildly?
+A: Add Filter CHOP with width 20-50 samples
+   Or enable smoothing in NeuroVis DSP controls
+
+===================================================================
+SAVE YOUR PROJECT
+===================================================================
+
+Save as: NeuroVis_EEG_Visualization.toe
+
+Enjoy brain-controlled visuals! 🧠✨

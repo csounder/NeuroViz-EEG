@@ -6,7 +6,11 @@ import { useShallow } from "zustand/react/shallow";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { RawEEGChart } from "@/components/charts/RawEEGChart";
 import { Stat } from "@/components/ui/Stat";
-import { ScaleControl, type ScaleState } from "@/components/ui/ScaleControl";
+import {
+  ScaleControl,
+  TraceSpeedControl,
+  type ScaleState,
+} from "@/components/ui/ScaleControl";
 import { useNeuroStore } from "@/lib/store";
 import { formatNumber } from "@/lib/utils";
 
@@ -24,6 +28,7 @@ export default function RawPage() {
     auto: true,
     value: 200,
   });
+  const [traceWindow, setTraceWindow] = React.useState(256);
 
   return (
     <div className="space-y-6">
@@ -41,9 +46,11 @@ export default function RawPage() {
             height={520}
             autoScale={scale.auto}
             scaleValue={scale.value}
+            windowSamples={traceWindow}
           />
-          <div className="px-5 pb-4">
+          <div className="flex flex-col gap-2 px-5 pb-4 lg:flex-row">
             <ScaleControl
+              className="flex-1"
               state={scale}
               onChange={setScale}
               label="Y-range"
@@ -53,6 +60,11 @@ export default function RawPage() {
               max={2000}
               helpAuto="Each channel lane independently re-scales to its own peak so signals always fill the lane."
               helpManual="Every lane uses the same fixed ±µV range — useful for comparing channels or watching for artifacts."
+            />
+            <TraceSpeedControl
+              className="flex-1"
+              value={traceWindow}
+              onChange={setTraceWindow}
             />
           </div>
         </CardBody>

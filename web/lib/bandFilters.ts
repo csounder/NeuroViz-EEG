@@ -10,8 +10,9 @@
 
 import { Biquad } from "./biquad";
 import { BAND_NAMES, type BandName } from "./types";
+import { MIND_MONITOR_BAND_EDGES } from "./mindMonitor";
 
-/** Canonical EEG band edges (Hz), matching NeuroVis + NeurOSC conventions. */
+/** Canonical EEG band edges (Hz) for trace visualization. */
 export const BAND_BOUNDS: Record<BandName, [number, number]> = {
   delta: [0.5, 4],
   theta: [4, 8],
@@ -20,10 +21,13 @@ export const BAND_BOUNDS: Record<BandName, [number, number]> = {
   gamma: [30, 50],
 };
 
+export type BandEdgeProfile = "neurovis" | "mindmonitor";
+
 const NUM_CHANNELS = 4;
 
 class BandFilterBank {
   private fs = 256;
+  private edgeProfile: BandEdgeProfile = "neurovis";
   /** [band][channel] = [highpass, lowpass] biquads in series. */
   private filters: Record<BandName, Biquad[][]> = {} as any;
 
@@ -37,9 +41,27 @@ class BandFilterBank {
     this.rebuild(fs);
   }
 
+  /** Switch band edges between NeuroVis defaults and Mind Monitor manual. */
+  setEdgeProfile(profile: BandEdgeProfile) {
+    if (this.edgeProfile === profile) return;
+    this.edgeProfile = profile;
+    this.rebuild(this.fs);
+  }
+
+  getEdgeProfile(): BandEdgeProfile {
+    return this.edgeProfile;
+  }
+
+  private bandEdges(): Record<BandName, [number, number]> {
+    return this.edgeProfile === "mindmonitor"
+      ? MIND_MONITOR_BAND_EDGES
+      : BAND_BOUNDS;
+  }
+
   private rebuild(fs: number) {
+    const bounds = this.bandEdges();
     for (const band of BAND_NAMES) {
-      const [lo, hi] = BAND_BOUNDS[band];
+      const [lo, hi] = bounds[band];
       const chans: Biquad[][] = [];
       for (let ch = 0; ch < NUM_CHANNELS; ch++) {
         chans.push([

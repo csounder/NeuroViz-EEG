@@ -35,9 +35,10 @@ export function isWsOpen(): boolean {
  * high in the tree (AppShell does).
  */
 export function useNeuroVisSocket() {
-  const { wsUrl, setWsStatus, ingest } = useNeuroStore(
+  const { wsUrl, wsReconnectEpoch, setWsStatus, ingest } = useNeuroStore(
     useShallow((s) => ({
       wsUrl: s.wsUrl,
+      wsReconnectEpoch: s.wsReconnectEpoch,
       setWsStatus: s.setWsStatus,
       ingest: s.ingest,
     })),
@@ -103,7 +104,7 @@ export function useNeuroVisSocket() {
       if (activeSocket === wsRef.current) activeSocket = null;
       wsRef.current = null;
     };
-  }, [wsUrl, setWsStatus, ingest]);
+  }, [wsUrl, wsReconnectEpoch, setWsStatus, ingest]);
 
   return {
     send: (data: unknown) => wsSend(data),

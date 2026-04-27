@@ -3,7 +3,11 @@
 import * as React from "react";
 import { ChevronDown, Maximize2, Minimize2 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
-import { ScaleControl, type ScaleState } from "@/components/ui/ScaleControl";
+import {
+  ScaleControl,
+  TraceSpeedControl,
+  type ScaleState,
+} from "@/components/ui/ScaleControl";
 import { cn } from "@/lib/utils";
 import {
   DISPLAY_ORDER,
@@ -36,6 +40,13 @@ export function DisplayPanel({
 }) {
   const spec = DISPLAY_REGISTRY[kind];
   const Icon = spec.icon;
+  const [traceWindow, setTraceWindow] = React.useState(
+    spec.defaultTraceWindow ?? 256,
+  );
+
+  React.useEffect(() => {
+    setTraceWindow(spec.defaultTraceWindow ?? 256);
+  }, [spec.defaultTraceWindow, kind]);
 
   return (
     <Card className={cn("flex h-full min-w-0 flex-col", className)}>
@@ -62,7 +73,7 @@ export function DisplayPanel({
       </CardHeader>
       <CardBody className="flex min-h-0 flex-1 flex-col gap-3 p-4">
         <div className="min-h-0 flex-1">
-          {spec.render({ height: bodyHeight, scale })}
+          {spec.render({ height: bodyHeight, scale, traceWindow })}
         </div>
         {spec.scaleControl && (
           <ScaleControl
@@ -76,6 +87,13 @@ export function DisplayPanel({
             max={spec.scaleControl.max}
             helpAuto={spec.scaleControl.helpAuto}
             helpManual={spec.scaleControl.helpManual}
+          />
+        )}
+        {spec.defaultTraceWindow && (
+          <TraceSpeedControl
+            compact
+            value={traceWindow}
+            onChange={setTraceWindow}
           />
         )}
       </CardBody>

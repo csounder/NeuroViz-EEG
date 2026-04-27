@@ -57,6 +57,22 @@ export interface CalibrationSessionState {
   baseline: CalibrationBaseline | null;
 }
 
+/** React SSR / first client paint — no `localStorage` (avoids hydration mismatch vs `readStoredBaseline()`). */
+export const CALIBRATION_STATE_HYDRATION_SAFE: CalibrationSessionState = {
+  running: false,
+  totalSec: DEFAULT_DURATION_SEC,
+  elapsedSec: 0,
+  remainingSec: DEFAULT_DURATION_SEC,
+  progress: 0,
+  samples: 0,
+  phase: "inhale",
+  phaseSecondsLeft: INHALE_SEC,
+  phaseProgress: 0,
+  cycle: 1,
+  cue: "Close your eyes and settle",
+  baseline: null,
+};
+
 class Calibration {
   private listeners = new Set<Listener>();
   private timer: ReturnType<typeof setInterval> | null = null;

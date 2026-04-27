@@ -25,8 +25,21 @@ async function request<T = unknown>(
   return (await res.text()) as unknown as T;
 }
 
+export type BridgeInfo = {
+  bridgeMode: string;
+  label: string;
+  muse2Class: string;
+  athenaClass: string;
+};
+
 export const api = {
   status: () => request("/api/status"),
+  getBridge: () => request<BridgeInfo>("/api/bridge"),
+  setBridgeMode: (mode: "swift" | "athena") =>
+    request<{ ok: boolean; bridgeMode: string; changed?: boolean }>(
+      "/api/bridge/mode",
+      { method: "POST", body: JSON.stringify({ mode }) },
+    ),
   devices: () => request("/api/devices"),
   ports: () => request("/api/ports"),
 

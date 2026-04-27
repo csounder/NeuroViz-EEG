@@ -21,7 +21,11 @@ import { BrainStateCard } from "@/components/widgets/BrainStateCard";
 import { QuickActions } from "@/components/widgets/QuickActions";
 import { useNeuroStore } from "@/lib/store";
 import { BandHistoryChart } from "@/components/charts/BandHistoryChart";
-import { ScaleControl, type ScaleState } from "@/components/ui/ScaleControl";
+import {
+  ScaleControl,
+  TraceSpeedControl,
+  type ScaleState,
+} from "@/components/ui/ScaleControl";
 
 export default function OverviewPage() {
   const { wsStatus, lastMessageAt, packetCount, deviceName, settings } =
@@ -43,6 +47,7 @@ export default function OverviewPage() {
     auto: true,
     value: 100,
   });
+  const [rawTraceWindow, setRawTraceWindow] = React.useState(256);
 
   const latency =
     lastMessageAt !== null ? Date.now() - lastMessageAt : null;
@@ -122,10 +127,12 @@ export default function OverviewPage() {
               height={320}
               autoScale={rawScale.auto}
               scaleValue={rawScale.value}
+              windowSamples={rawTraceWindow}
             />
-            <div className="px-5 pb-4">
+            <div className="flex flex-col gap-2 px-5 pb-4 xl:flex-row">
               <ScaleControl
                 compact
+                className="flex-1"
                 state={rawScale}
                 onChange={setRawScale}
                 label="Y"
@@ -135,6 +142,12 @@ export default function OverviewPage() {
                 max={2000}
                 helpAuto="Each lane auto-scales to its own signal."
                 helpManual="Fixed ±µV range across all lanes."
+              />
+              <TraceSpeedControl
+                compact
+                className="flex-1"
+                value={rawTraceWindow}
+                onChange={setRawTraceWindow}
               />
             </div>
           </CardBody>

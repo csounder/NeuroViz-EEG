@@ -22,6 +22,11 @@ import {
   elementsBandAbsoluteArgs,
   elementsBandRelativeArgs,
 } from "./bandOscChannels";
+import { computePSD } from "./fft";
+import {
+  MIND_MONITOR_FFT_SIZE,
+  resamplePsdToMindMonitorBins,
+} from "./mindMonitor";
 
 export type SimProfile =
   | "relaxed_eyes_closed"
@@ -56,6 +61,8 @@ export interface SimulatorOptions {
   sendBands: boolean;
   sendMotion: boolean;
   sendPPG: boolean;
+  /** Emit `/elements/raw_fft0`…`3` (129 floats each @ bandRate) — MuseIO / Mind Monitor. */
+  sendMindMonitorRawFft: boolean;
   amplitudeScale: number; // scales raw EEG µV (test "noise floor")
   mainsHz: 50 | 60; // power-line artifact frequency
 }
@@ -70,6 +77,7 @@ export const DEFAULT_SIM_OPTIONS: SimulatorOptions = {
   sendBands: true,
   sendMotion: false,
   sendPPG: false,
+  sendMindMonitorRawFft: false,
   amplitudeScale: 1.0,
   mainsHz: 60,
 };
@@ -86,8 +94,8 @@ export interface SimulatorHooks {
   onEEG: (raw: number[]) => void;
   /** Called on each band-power update. */
   onBandPowers: (absolute: BandPowers, relative: BandPowers) => void;
-  /** Called on each motion update (sensor = 'accel' | 'gyro' | 'ppg'). */
-  onMotion: (sensor: "accel" | "gyro" | "ppg", values: number[]) => void;
+  /** Called on each motion/aux update. */
+  onMotion: (sensor: "accel" | "gyro" | "ppg" | "fnirs", values: number[]) => void;
   /** Called at wsTickRate with per-band per-channel filtered snapshots. */
   onBandTraces?: (perBandPerChannel: Record<BandName, number[]>) => void;
   /** Called once per packet, for counters. */
@@ -115,6 +123,8 @@ export class BrowserEEGSimulator {
   private sampleIdx = 0;
   private lastEEG: number[] = [0, 0, 0, 0];
   private lastBandTraces: Record<BandName, number[]> | null = null;
+  /** Last N samples per channel for Mind Monitor–style Hamming FFT. */
+  private fftRing: number[][] = [[], [], [], []];
   private startedAt = 0;
   private packetsSent = 0;
 
@@ -155,6 +165,7 @@ export class BrowserEEGSimulator {
     this.startedAt = Date.now();
     this.sampleIdx = 0;
     this.packetsSent = 0;
+    this.fftRing = [[], [], [], []];
 
     // Raw EEG @ sampleRate (default 256 Hz)
     const eegPeriodMs = 1000 / this.opts.sampleRate;
@@ -179,6 +190,11 @@ export class BrowserEEGSimulator {
       // views have proper per-band per-channel traces.
       this.lastBandTraces = bandFilters.process(processed);
       this.lastEEG = processed;
+      for (let ch = 0; ch < 4; ch++) {
+        const row = this.fftRing[ch];
+        row.push(processed[ch] ?? 0);
+        if (row.length > MIND_MONITOR_FFT_SIZE) row.shift();
+      }
       this.packetsSent++;
       this.hooks.onPacket();
 
@@ -225,14 +241,19 @@ export class BrowserEEGSimulator {
       const { absolute, relative } = this.generateBandPowers();
       // Apply log + z-score normalisation (off by default) to the absolute
       // band powers. Relative stays unnormalised (it's already 0..1 per the
-      // NeurOSC convention and normalising would flatten interpretability).
+      // Heavy normalising would flatten interpretability).
       const absNorm = dsp.normalizeBandPowers(absolute, "ALL");
       this.hooks.onBandPowers(absNorm, relative);
+      const msgs: OscMsg[] = [];
       if (this.opts.sendBands) {
-        this.hooks.oscSend(
-          this.buildBandOscMessages(absNorm, relative, this.lastBandTraces),
+        msgs.push(
+          ...this.buildBandOscMessages(absNorm, relative, this.lastBandTraces),
         );
       }
+      if (this.opts.sendMindMonitorRawFft) {
+        msgs.push(...this.buildMindMonitorRawFftOsc());
+      }
+      if (msgs.length) this.hooks.oscSend(msgs);
     }, bandPeriodMs);
 
     // Motion @ motionRate (default 10 Hz)
@@ -242,9 +263,11 @@ export class BrowserEEGSimulator {
       const accel = this.generateMotion("accel", t);
       const gyro = this.generateMotion("gyro", t);
       const ppg = this.generateMotion("ppg", t);
+      const fnirs = this.generateMotion("fnirs", t);
       this.hooks.onMotion("accel", accel);
       this.hooks.onMotion("gyro", gyro);
       this.hooks.onMotion("ppg", ppg);
+      this.hooks.onMotion("fnirs", fnirs);
 
       const oscMsgs: OscMsg[] = [];
       if (this.opts.sendMotion) {
@@ -256,6 +279,7 @@ export class BrowserEEGSimulator {
       if (this.opts.sendPPG) {
         oscMsgs.push(
           { address: `${this.opts.oscPrefix}/ppg`, args: ppg },
+          { address: `${this.opts.oscPrefix}/fnirs`, args: fnirs },
           {
             address: `${this.opts.oscPrefix}/ppg/hr`,
             args: [72 + 4 * Math.sin(t * 0.05)],
@@ -385,7 +409,7 @@ export class BrowserEEGSimulator {
   }
 
   private generateMotion(
-    sensor: "accel" | "gyro" | "ppg",
+    sensor: "accel" | "gyro" | "ppg" | "fnirs",
     time: number,
   ): number[] {
     if (sensor === "accel") {
@@ -402,6 +426,15 @@ export class BrowserEEGSimulator {
         Math.sin(2 * Math.PI * 0.2 * time) * 3 + (Math.random() - 0.5) * 1,
       ];
     }
+    if (sensor === "fnirs") {
+      const slow = 0.5 + 0.5 * Math.sin(2 * Math.PI * 0.035 * time);
+      const breath = 0.5 + 0.5 * Math.sin(2 * Math.PI * 0.09 * time + 0.8);
+      return [
+        0.25 + slow * 0.55 + (Math.random() - 0.5) * 0.015,
+        0.20 + breath * 0.50 + (Math.random() - 0.5) * 0.015,
+        0.15 + (1 - slow) * 0.45 + (Math.random() - 0.5) * 0.015,
+      ];
+    }
     // ppg — simulated red/green/IR with heart-rate modulation at 72 BPM
     const bpm = 72;
     const hr = bpm / 60;
@@ -411,6 +444,32 @@ export class BrowserEEGSimulator {
       58000 + pulse * 4500,
       62000 + pulse * 5500,
     ];
+  }
+
+  /**
+   * MuseIO-compatible log-PSD vectors: 129 bins, 0–110 Hz, ~10 Hz with
+   * `bandRate`. Hamming window, 256-point FFT (Mind Monitor discrete view).
+   */
+  private buildMindMonitorRawFftOsc(): OscMsg[] {
+    const p = this.opts.oscPrefix;
+    const out: OscMsg[] = [];
+    const n = MIND_MONITOR_FFT_SIZE;
+    for (let ch = 0; ch < 4; ch++) {
+      const buf = this.fftRing[ch];
+      if (buf.length < n) continue;
+      const tail = buf.slice(-n);
+      const res = computePSD(tail, this.opts.sampleRate, {
+        targetN: n,
+        window: "hamming",
+      });
+      if (!res) continue;
+      const bins = resamplePsdToMindMonitorBins(res.psdDb, res.freqs);
+      out.push({
+        address: `${p}/elements/raw_fft${ch}`,
+        args: bins,
+      });
+    }
+    return out;
   }
 
   private buildBandOscMessages(

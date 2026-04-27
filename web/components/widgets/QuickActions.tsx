@@ -15,11 +15,15 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/Button";
 import { api } from "@/lib/api";
+import { getRecorderEegLayout, inferResearchDeviceProfile } from "@/lib/researchDeviceProfile";
 import { useNeuroStore } from "@/lib/store";
 import { recorder } from "@/lib/recorder";
 import { clientSim } from "@/lib/clientSim";
 import { dsp } from "@/lib/dspPipeline";
-import { calibration } from "@/lib/calibration";
+import {
+  calibration,
+  CALIBRATION_STATE_HYDRATION_SAFE,
+} from "@/lib/calibration";
 
 /**
  * Overview-hero action bar.
@@ -36,19 +40,20 @@ import { calibration } from "@/lib/calibration";
  * hardware but flows through the same OSC + DSP path.
  */
 export function QuickActions() {
-  const { wsStatus, settings, deviceName, simRunning } = useNeuroStore(
+  const { wsStatus, settings, deviceName, simRunning, latestEEGDevice } = useNeuroStore(
     useShallow((s) => ({
       wsStatus: s.wsStatus,
       settings: s.settings,
       deviceName: s.deviceName,
       simRunning: s.clientSim.running,
+      latestEEGDevice: s.latestEEG?.deviceName,
     })),
   );
 
   const [recState, setRecState] = React.useState(recorder.status());
   React.useEffect(() => recorder.subscribe(setRecState), []);
 
-  const [calibState, setCalibState] = React.useState(calibration.state);
+  const [calibState, setCalibState] = React.useState(CALIBRATION_STATE_HYDRATION_SAFE);
   React.useEffect(() => calibration.subscribe(setCalibState), []);
 
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -74,6 +79,13 @@ export function QuickActions() {
         // Users get instant feedback that it saved.
       }
     } else {
+      const profile = inferResearchDeviceProfile({
+        deviceName,
+        eegDeviceName: latestEEGDevice,
+        settingsSimulator: Boolean(settings.simulatorMode),
+        clientSimRunning: simRunning,
+      });
+      const layout = getRecorderEegLayout(profile);
       recorder.start({
         name: `session-${new Date().toISOString().slice(0, 16).replace(/[:]/g, "")}`,
         source: simOn ? "simulator" : isConnected ? "device" : "simulator",
@@ -81,6 +93,8 @@ export function QuickActions() {
         sampleRate: 256,
         simulatorProfile: (settings as any).simulatorProfile,
         dsp: dsp.getConfig(),
+        eegChannelCount: layout.count,
+        channelLabels: layout.labels,
       });
     }
   };

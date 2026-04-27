@@ -1,16 +1,37 @@
 "use client";
 
 import * as React from "react";
-import { Cpu, HardDrive, Settings as SettingsIcon, TestTube2 } from "lucide-react";
+import {
+  Bluetooth,
+  Cpu,
+  HardDrive,
+  Settings as SettingsIcon,
+  TestTube2,
+} from "lucide-react";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Toggle } from "@/components/ui/Toggle";
 import { DeviceSelector } from "@/components/widgets/DeviceSelector";
 import { useNeuroStore } from "@/lib/store";
-import { api } from "@/lib/api";
+import { api, type BridgeInfo } from "@/lib/api";
 
 export default function SettingsPage() {
   const settings = useNeuroStore((s) => s.settings);
   const [busy, setBusy] = React.useState(false);
+  const [bridgeBusy, setBridgeBusy] = React.useState(false);
+  const [bridgeInfo, setBridgeInfo] = React.useState<BridgeInfo | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    api
+      .getBridge()
+      .then((b) => {
+        if (!cancelled) setBridgeInfo(b);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const toggleSim = async () => {
     setBusy(true);
@@ -57,6 +78,53 @@ export default function SettingsPage() {
               label="Enable simulator"
               hint="Generates synthetic 4-channel EEG with realistic band structure. Ideal for demos, UI testing, and OSC plumbing checks."
             />
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle
+              icon={<Bluetooth className="h-4 w-4" />}
+              description="Switch without restarting Node. Swift = LibMuse (Muse 2/3/S). Athena = Python BLE for Muse S Athena (273e0013) only."
+            >
+              Muse BLE backend
+            </CardTitle>
+          </CardHeader>
+          <CardBody className="space-y-3 text-sm">
+            <div className="flex flex-col gap-2">
+              <label className="text-xs text-zinc-500" htmlFor="bridge-mode">
+                Active bridge
+              </label>
+              <select
+                id="bridge-mode"
+                className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:ring-1 focus:ring-sky-500"
+                disabled={bridgeBusy || !bridgeInfo}
+                value={bridgeInfo?.bridgeMode ?? "swift"}
+                onChange={async (e) => {
+                  const mode = e.target.value === "athena" ? "athena" : "swift";
+                  setBridgeBusy(true);
+                  try {
+                    await api.setBridgeMode(mode);
+                    const b = await api.getBridge();
+                    setBridgeInfo(b);
+                  } catch {
+                  } finally {
+                    setBridgeBusy(false);
+                  }
+                }}
+              >
+                <option value="swift">Swift (LibMuse) — Muse 2, Muse 3, Muse S, …</option>
+                <option value="athena">Python (Athena) — Muse S Athena direct BLE</option>
+              </select>
+            </div>
+            {bridgeInfo ? (
+              <p className="text-xs leading-relaxed text-zinc-500">
+                <span className="text-zinc-400">{bridgeInfo.label}</span>
+                <br />
+                Muse-33xx / Muse 2: {bridgeInfo.muse2Class} Athena headset:{" "}
+                {bridgeInfo.athenaClass}
+              </p>
+            ) : null}
           </CardBody>
         </Card>
 

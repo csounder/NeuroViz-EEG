@@ -44,6 +44,8 @@ export interface BandTracesChartProps {
   autoScale?: boolean;
   /** When autoScale=false, manual ±dB half-span (bipolar around frame center). */
   scaleValue?: number;
+  /** Number of most-recent samples to draw. Shorter windows feel faster. */
+  windowSamples?: number;
   showLegend?: boolean;
 }
 
@@ -59,6 +61,7 @@ export function BandTracesChart({
   height = 360,
   autoScale = true,
   scaleValue = 200,
+  windowSamples = 256,
   showLegend = true,
 }: BandTracesChartProps) {
   const layout = resolveLayout(layoutProp);
@@ -145,6 +148,7 @@ export function BandTracesChart({
           rollingBandRaw,
           autoScale,
           scaleValue,
+          windowSamples,
         );
       } else {
         drawOverlayLayout(
@@ -155,6 +159,7 @@ export function BandTracesChart({
           rollingBandRaw,
           autoScale,
           scaleValue,
+          windowSamples,
         );
       }
 
@@ -166,7 +171,7 @@ export function BandTracesChart({
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       ro.disconnect();
     };
-  }, [layout, selected, height, autoScale, scaleValue]);
+  }, [layout, selected, height, autoScale, scaleValue, windowSamples]);
 
   return (
     <div className="space-y-2">
@@ -218,6 +223,7 @@ export function BandTracesChart({
 function collectDbExtentsOverlay(
   selected: BandName[],
   rollingBandRaw: Record<BandName, number[][]>,
+  windowSamples: number,
 ): { dbMin: number; dbMax: number } {
   let dbMin = Infinity;
   let dbMax = -Infinity;
@@ -225,7 +231,9 @@ function collectDbExtentsOverlay(
     const chans = rollingBandRaw[band];
     if (!chans) continue;
     for (let ch = 0; ch < 4; ch++) {
-      const buf = chans[ch] ?? [];
+      const fullBuf = chans[ch] ?? [];
+      const buf =
+        fullBuf.length > windowSamples ? fullBuf.slice(-windowSamples) : fullBuf;
       for (let i = 0; i < buf.length; i++) {
         const db = sampleUvToMindMonitorDb(buf, i);
         if (db < dbMin) dbMin = db;
@@ -294,6 +302,7 @@ function drawOverlayLayout(
   rollingBandRaw: Record<BandName, number[][]>,
   autoScale: boolean,
   scaleValue: number,
+  windowSamples: number,
 ) {
   ctx.strokeStyle = "rgba(63,63,70,0.25)";
   ctx.lineWidth = 1;
@@ -305,7 +314,11 @@ function drawOverlayLayout(
   }
   ctx.stroke();
 
-  const { dbMin, dbMax } = collectDbExtentsOverlay(selected, rollingBandRaw);
+  const { dbMin, dbMax } = collectDbExtentsOverlay(
+    selected,
+    rollingBandRaw,
+    windowSamples,
+  );
   const { centerDb, halfSpan } = resolveDbScale(
     autoScale,
     scaleValue,
@@ -333,11 +346,13 @@ function drawOverlayLayout(
 
     const channelAlphas = [0.95, 0.75, 0.6, 0.45];
     for (let ch = 0; ch < 4; ch++) {
-      const buf = chans[ch] ?? [];
+      const fullBuf = chans[ch] ?? [];
+      const buf =
+        fullBuf.length > windowSamples ? fullBuf.slice(-windowSamples) : fullBuf;
       if (buf.length < 2) continue;
       ctx.strokeStyle = color;
       ctx.globalAlpha = channelAlphas[ch];
-      ctx.lineWidth = 1.15;
+      ctx.lineWidth = 1;
       ctx.beginPath();
       const step = w / (buf.length - 1);
       for (let i = 0; i < buf.length; i++) {
@@ -361,6 +376,7 @@ function drawStackedLayout(
   rollingBandRaw: Record<BandName, number[][]>,
   autoScale: boolean,
   scaleValue: number,
+  windowSamples: number,
 ) {
   const n = selected.length;
   const gutter = 52;
@@ -381,7 +397,9 @@ function drawStackedLayout(
     let dbMin = Infinity;
     let dbMax = -Infinity;
     for (let ch = 0; ch < 4; ch++) {
-      const buf = chans[ch] ?? [];
+      const fullBuf = chans[ch] ?? [];
+      const buf =
+        fullBuf.length > windowSamples ? fullBuf.slice(-windowSamples) : fullBuf;
       for (let i = 0; i < buf.length; i++) {
         const db = sampleUvToMindMonitorDb(buf, i);
         if (db < dbMin) dbMin = db;
@@ -440,11 +458,13 @@ function drawStackedLayout(
     ctx.restore();
 
     for (let ch = 0; ch < 4; ch++) {
-      const buf = chans[ch] ?? [];
+      const fullBuf = chans[ch] ?? [];
+      const buf =
+        fullBuf.length > windowSamples ? fullBuf.slice(-windowSamples) : fullBuf;
       if (buf.length < 2) continue;
       ctx.strokeStyle = CHANNEL_TRACE_COLORS[ch];
       ctx.globalAlpha = 0.9;
-      ctx.lineWidth = 1.2;
+      ctx.lineWidth = 1;
       ctx.beginPath();
       for (let i = 0; i < buf.length; i++) {
         const x = gutter + (i / (buf.length - 1)) * plotW;

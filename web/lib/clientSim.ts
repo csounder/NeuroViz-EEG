@@ -40,13 +40,9 @@ function ensureSim(): BrowserEEGSimulator {
     onEEG: (raw) => {
       useNeuroStore.getState().feedSimEEG(raw);
       if (recorder.status().recording) {
-        recorder.pushEEG(
-          raw[0] ?? 0,
-          raw[1] ?? 0,
-          raw[2] ?? 0,
-          raw[3] ?? 0,
-          dsp.lastArtifact ? 1 : 0,
-        );
+        const n = recorder.getActiveEegChannelCount();
+        const row = Array.from({ length: n }, (_, i) => Number(raw[i]) || 0);
+        recorder.pushEEGSample(row, dsp.lastArtifact ? 1 : 0);
       }
     },
     onBandTraces: (perBand) => {
@@ -96,6 +92,9 @@ export const clientSim = {
     resetBandFilterStreamEstimator();
     packetCount = 0;
     lastRelayActive = false;
+    s.setOptions({
+      sendMindMonitorRawFft: useNeuroStore.getState().mindMonitorMode,
+    });
     s.start();
     useNeuroStore.getState().setClientSim({
       running: true,

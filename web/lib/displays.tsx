@@ -4,15 +4,20 @@ import * as React from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
+  AudioWaveform,
   BarChart3,
   Brain,
   Equal,
   Layers,
   Layers3,
+  LayoutGrid,
   LineChart,
+  Monitor,
+  PanelTop,
   Radio,
   Rows3,
   Waves,
+  Waypoints,
 } from "lucide-react";
 import { RawEEGChart } from "@/components/charts/RawEEGChart";
 import { FFTChart } from "@/components/charts/FFTChart";
@@ -21,6 +26,9 @@ import { BandHistoryChart } from "@/components/charts/BandHistoryChart";
 import { BandBarsWithSparklines } from "@/components/charts/BandBarsWithSparklines";
 import { BandTracesChart } from "@/components/charts/BandTracesChart";
 import { WaterfallChart } from "@/components/charts/WaterfallChart";
+import { SpectrogramChart } from "@/components/charts/SpectrogramChart";
+import { ButterflyEEGChart } from "@/components/charts/ButterflyEEGChart";
+import { MuseLabPanel } from "@/components/charts/MuseLabPanel";
 import { BrainStateCard } from "@/components/widgets/BrainStateCard";
 import { OSCMonitor } from "@/components/widgets/OSCMonitor";
 import type { ScaleState } from "@/components/ui/ScaleControl";
@@ -28,7 +36,12 @@ import type { ScaleState } from "@/components/ui/ScaleControl";
 /** Available visualizations. Serialized as a string in localStorage layouts. */
 export type DisplayKind =
   | "raw"
+  | "openbciTs"
+  | "butterfly"
+  | "spectrogram"
+  | "muselab"
   | "fft"
+  | "fftSmoothed"
   | "bands"
   | "bandHistory"
   | "bandSparks"
@@ -55,8 +68,14 @@ export interface DisplaySpec {
     helpAuto: string;
     helpManual: string;
   };
-  /** Render function — receives the height available and scale state. */
-  render: (opts: { height: number; scale: ScaleState }) => React.ReactNode;
+  /** Default rolling window for waveform-like panes. */
+  defaultTraceWindow?: number;
+  /** Render function — receives the height available and control state. */
+  render: (opts: {
+    height: number;
+    scale: ScaleState;
+    traceWindow: number;
+  }) => React.ReactNode;
 }
 
 const RAW: DisplaySpec = {
@@ -74,13 +93,102 @@ const RAW: DisplaySpec = {
     helpAuto: "Each lane auto-scales to its own signal.",
     helpManual: "Fixed ±µV range across all lanes.",
   },
-  render: ({ height, scale }) => (
+  defaultTraceWindow: 256,
+  render: ({ height, scale, traceWindow }) => (
     <RawEEGChart
+      height={height}
+      autoScale={scale.auto}
+      scaleValue={scale.value}
+      windowSamples={traceWindow}
+    />
+  ),
+};
+
+const OPENBCI_TS: DisplaySpec = {
+  kind: "openbciTs",
+  label: "OpenBCI-style TS",
+  description: "High-contrast multi-channel time series (GUI-style)",
+  icon: Monitor,
+  defaultScale: { auto: true, value: 200 },
+  scaleControl: {
+    label: "Y",
+    unit: "µV",
+    bipolar: true,
+    min: 10,
+    max: 2000,
+    helpAuto: "Each lane auto-scales independently.",
+    helpManual: "Fixed ±µV range for all lanes.",
+  },
+  defaultTraceWindow: 256,
+  render: ({ height, scale, traceWindow }) => (
+    <RawEEGChart
+      variant="openbci"
+      height={height}
+      autoScale={scale.auto}
+      scaleValue={scale.value}
+      windowSamples={traceWindow}
+    />
+  ),
+};
+
+const BUTTERFLY: DisplaySpec = {
+  kind: "butterfly",
+  label: "Butterfly EEG",
+  description: "Overlaid channels with shared scale (clinical-style)",
+  icon: Waypoints,
+  defaultScale: { auto: true, value: 200 },
+  scaleControl: {
+    label: "Amplitude",
+    unit: "µV",
+    bipolar: true,
+    min: 10,
+    max: 2000,
+    helpAuto: "Single scale from peak across all channels.",
+    helpManual: "Fixed ±µV for the shared butterfly gain.",
+  },
+  defaultTraceWindow: 256,
+  render: ({ height, scale, traceWindow }) => (
+    <ButterflyEEGChart
+      height={height}
+      autoScale={scale.auto}
+      scaleValue={scale.value}
+      windowSamples={traceWindow}
+    />
+  ),
+};
+
+const SPECTROGRAM: DisplaySpec = {
+  kind: "spectrogram",
+  label: "Spectrogram",
+  description: "Rolling STFT heatmap (OpenBCI / EEG toolchain style)",
+  icon: LayoutGrid,
+  defaultScale: { auto: true, value: 45 },
+  scaleControl: {
+    label: "dB window",
+    unit: "dB",
+    bipolar: false,
+    min: 15,
+    max: 80,
+    helpAuto: "Color range tracks min/max dB in the rolling columns.",
+    helpManual: "Fixed PSD range: floor −N dB up to +6 dB.",
+  },
+  render: ({ height, scale }) => (
+    <SpectrogramChart
       height={height}
       autoScale={scale.auto}
       scaleValue={scale.value}
     />
   ),
+};
+
+const MUSELAB: DisplaySpec = {
+  kind: "muselab",
+  label: "MuseLab-style",
+  description: "Raw traces above spectrum (classic MuseLab layout)",
+  icon: PanelTop,
+  defaultScale: { auto: true, value: 100 },
+  scaleControl: null,
+  render: ({ height }) => <MuseLabPanel height={height} />,
 };
 
 const FFT: DisplaySpec = {
@@ -102,6 +210,31 @@ const FFT: DisplaySpec = {
       height={height}
       autoScale={scale.auto}
       scaleValue={scale.value}
+    />
+  ),
+};
+
+const FFT_SMOOTHED: DisplaySpec = {
+  kind: "fftSmoothed",
+  label: "Smoothed FFT",
+  description: "Temporally averaged PSD (OpenBCI GUI–like stability)",
+  icon: AudioWaveform,
+  defaultScale: { auto: true, value: 40 },
+  scaleControl: {
+    label: "Y",
+    unit: "dB",
+    min: 10,
+    max: 120,
+    helpAuto: "EMA tracks signal dB min/max.",
+    helpManual: "Fixed 0 → scale dB.",
+  },
+  render: ({ height, scale }) => (
+    <FFTChart
+      height={height}
+      autoScale={scale.auto}
+      scaleValue={scale.value}
+      psdTimeSmooth={0.92}
+      updateIntervalMs={100}
     />
   ),
 };
@@ -177,12 +310,14 @@ const BANDS_COMBINED: DisplaySpec = {
     helpAuto: "dB range tracks all overlaid traces (Mind Monitor–style).",
     helpManual: "Fixed ±dB half-span around the current level center.",
   },
-  render: ({ height, scale }) => (
+  defaultTraceWindow: 256,
+  render: ({ height, scale, traceWindow }) => (
     <BandTracesChart
       layout="overlay"
       height={height}
       autoScale={scale.auto}
       scaleValue={scale.value}
+      windowSamples={traceWindow}
     />
   ),
 };
@@ -202,12 +337,14 @@ const BANDS_MULTI: DisplaySpec = {
     helpAuto: "Each row auto-fits dB min/max for that band.",
     helpManual: "Fixed ±dB half-span on each row.",
   },
-  render: ({ height, scale }) => (
+  defaultTraceWindow: 256,
+  render: ({ height, scale, traceWindow }) => (
     <BandTracesChart
       layout="stacked"
       height={height}
       autoScale={scale.auto}
       scaleValue={scale.value}
+      windowSamples={traceWindow}
     />
   ),
 };
@@ -257,7 +394,12 @@ const OSC_MON: DisplaySpec = {
 
 export const DISPLAY_REGISTRY: Record<DisplayKind, DisplaySpec> = {
   raw: RAW,
+  openbciTs: OPENBCI_TS,
+  butterfly: BUTTERFLY,
+  spectrogram: SPECTROGRAM,
+  muselab: MUSELAB,
   fft: FFT,
+  fftSmoothed: FFT_SMOOTHED,
   bands: BANDS,
   bandHistory: BAND_HISTORY,
   bandSparks: BAND_SPARKS,
@@ -270,7 +412,12 @@ export const DISPLAY_REGISTRY: Record<DisplayKind, DisplaySpec> = {
 
 export const DISPLAY_ORDER: DisplayKind[] = [
   "raw",
+  "openbciTs",
+  "butterfly",
+  "spectrogram",
+  "muselab",
   "fft",
+  "fftSmoothed",
   "waterfall",
   "bandsCombined",
   "bandsMulti",

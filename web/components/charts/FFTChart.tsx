@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useNeuroStore } from "@/lib/store";
 import { BAND_COLORS, BAND_LABELS } from "@/lib/utils";
-import { BAND_NAMES, BAND_RANGES } from "@/lib/types";
+import { BAND_NAMES, BAND_RANGES, type BandName } from "@/lib/types";
 import { computePSD } from "@/lib/fft";
 
 const CHANNEL_LABELS = ["TP9", "AF7", "AF8", "TP10"];
@@ -17,7 +17,7 @@ interface Snapshot {
 /**
  * FFT Spectrum — real client-side FFT.
  *
- * Mirrors the NeurOSC algorithm exactly:
+ * Mind Monitor–style FFT visualization:
  *   - Grab trailing 512 samples per channel from the rolling raw buffer.
  *   - Subtract mean, apply Hann window, radix-2 FFT.
  *   - PSD = |FFT|² / N  →  10·log10(psd + 1e-10).
@@ -35,6 +35,11 @@ export function FFTChart({
   updateIntervalMs = 150,
   autoScale = true,
   scaleValue = 40,
+  /** Per-channel PSD EMA in [0,1). Higher → heavier temporal smoothing (OpenBCI “averaged” PSD feel). 0 = off. */
+  psdTimeSmooth = 0,
+  fftWindow = "hann" as "hann" | "hamming",
+  /** Override shaded band regions (e.g. Mind Monitor Hz edges). Default: `BAND_RANGES`. */
+  bandShadingRanges,
 }: {
   height?: number;
   sampleRate?: number;
@@ -45,11 +50,15 @@ export function FFTChart({
   /** If true, Y range auto-follows signal dB range (EMA). If false, range is 0..scaleValue dB. */
   autoScale?: boolean;
   scaleValue?: number;
+  psdTimeSmooth?: number;
+  fftWindow?: "hann" | "hamming";
+  bandShadingRanges?: Record<BandName, [number, number]>;
 }) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const rafRef = React.useRef<number | null>(null);
   const snapshotRef = React.useRef<Snapshot | null>(null);
+  const smoothPsdRef = React.useRef<Float64Array[] | null>(null);
   const lastComputeRef = React.useRef(0);
   const yMinRef = React.useRef(-40);
   const yMaxRef = React.useRef(10);
@@ -79,6 +88,8 @@ export function FFTChart({
     const padT = 20;
     const padB = 26;
 
+    const ranges = bandShadingRanges ?? BAND_RANGES;
+
     const recompute = () => {
       const { rollingRaw } = useNeuroStore.getState();
       const snapshots: Float64Array[] = [];
@@ -93,6 +104,7 @@ export function FFTChart({
           targetN: fftN,
           minFreq,
           maxFreq,
+          window: fftWindow,
         });
         if (!res) {
           snapshots.push(new Float64Array(0));
@@ -102,7 +114,26 @@ export function FFTChart({
         snapshots.push(res.psdDb);
       }
       if (freqs && freqs.length) {
-        snapshotRef.current = { freqs, psdDb: snapshots };
+        const alpha = Math.min(0.999, Math.max(0, psdTimeSmooth));
+        if (alpha > 1e-6) {
+          const prev = smoothPsdRef.current;
+          const blended = snapshots.map((arr, ch) => {
+            if (!arr.length) return arr;
+            const p = prev?.[ch];
+            if (!p || p.length !== arr.length) return new Float64Array(arr);
+            const out = new Float64Array(arr.length);
+            const inv = 1 - alpha;
+            for (let i = 0; i < arr.length; i++) {
+              out[i] = alpha * p[i] + inv * arr[i];
+            }
+            return out;
+          });
+          smoothPsdRef.current = blended;
+          snapshotRef.current = { freqs, psdDb: blended };
+        } else {
+          smoothPsdRef.current = null;
+          snapshotRef.current = { freqs, psdDb: snapshots };
+        }
       }
     };
 
@@ -127,7 +158,7 @@ export function FFTChart({
 
       // Band regions (background)
       for (const band of BAND_NAMES) {
-        const [lo, hi] = BAND_RANGES[band];
+        const [lo, hi] = ranges[band];
         const x1 = xFor(Math.max(lo, minFreq));
         const x2 = xFor(Math.min(hi, maxFreq));
         if (x2 <= x1) continue;
@@ -217,7 +248,7 @@ export function FFTChart({
       // Band labels
       ctx.font = "500 9px ui-sans-serif, system-ui";
       for (const band of BAND_NAMES) {
-        const [lo, hi] = BAND_RANGES[band];
+        const [lo, hi] = ranges[band];
         const mid = (Math.max(lo, minFreq) + Math.min(hi, maxFreq)) / 2;
         const x = xFor(mid);
         const label = BAND_LABELS[band];
@@ -263,6 +294,9 @@ export function FFTChart({
     updateIntervalMs,
     autoScale,
     scaleValue,
+    psdTimeSmooth,
+    fftWindow,
+    bandShadingRanges,
   ]);
 
   return (
@@ -281,7 +315,11 @@ export function FFTChart({
           </div>
         ))}
         <span className="ml-auto font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-          FFT {fftN} · {sampleRate} Hz · Hann window
+          FFT {fftN} · {sampleRate} Hz ·{" "}
+          {fftWindow === "hamming" ? "Hamming" : "Hann"} window
+          {psdTimeSmooth > 1e-6
+            ? ` · PSD smooth ${(psdTimeSmooth * 100).toFixed(0)}%`
+            : ""}
         </span>
       </div>
     </div>

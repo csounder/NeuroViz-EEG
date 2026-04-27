@@ -10,6 +10,8 @@ import {
   elementsBandAbsoluteArgs,
   elementsBandRelativeArgs,
 } from "@/lib/bandOscChannels";
+import { computePSD } from "@/lib/fft";
+import { resamplePsdToMindMonitorBins, MIND_MONITOR_FFT_SIZE } from "@/lib/mindMonitor";
 
 type Mode = "A" | "B";
 
@@ -41,7 +43,7 @@ const ZERO_BANDS: BandPowers = {
  *     Mode A (Muse-compatible arrays): /prefix/bands/alpha_absolute f f f f …
  *     Mode B (scalar per channel):      /prefix/eeg/AF7/alpha f …
  * - Shows a LIVE header with rate + destination, mode chips, and a scrollable
- *   monospace list — same spirit as the old NeuroVis OSC Monitor + NeurOSC
+ *   monospace list — same spirit as the legacy NeuroVis OSC monitor
  *   address preview.
  */
 export function OSCMonitor({
@@ -53,19 +55,31 @@ export function OSCMonitor({
   showHeader?: boolean;
   filterEnabled?: boolean;
 }) {
-  const { settings, rel, abs, bandTraces, motion, eeg, batteryPct, packetCount } =
-    useNeuroStore(
-      useShallow((s) => ({
-        settings: s.settings,
-        rel: s.latestBandsRel,
-        abs: s.latestBandsAbs,
-        bandTraces: s.latestBandTraces,
-        motion: s.motion,
-        eeg: s.latestEEG,
-        batteryPct: s.batteryPct,
-        packetCount: s.packetCount,
-      })),
-    );
+  const {
+    settings,
+    rel,
+    abs,
+    bandTraces,
+    motion,
+    eeg,
+    batteryPct,
+    packetCount,
+    rollingRaw,
+    mindMonitorMode,
+  } = useNeuroStore(
+    useShallow((s) => ({
+      settings: s.settings,
+      rel: s.latestBandsRel,
+      abs: s.latestBandsAbs,
+      bandTraces: s.latestBandTraces,
+      motion: s.motion,
+      eeg: s.latestEEG,
+      batteryPct: s.batteryPct,
+      packetCount: s.packetCount,
+      rollingRaw: s.rollingRaw,
+      mindMonitorMode: s.mindMonitorMode,
+    })),
+  );
 
   const prefix = settings.oscPrefix ?? "/muse";
   const host = settings.oscHost ?? "127.0.0.1";
@@ -122,6 +136,36 @@ export function OSCMonitor({
           tone: "raw",
         });
       });
+    }
+
+    if (mindMonitorMode || streams.rawFft) {
+      const sr = 256;
+      for (let ci = 0; ci < 4; ci++) {
+        const buf = rollingRaw[ci] ?? [];
+        let vals = "…";
+        if (buf.length >= MIND_MONITOR_FFT_SIZE) {
+          const tail = buf.slice(-MIND_MONITOR_FFT_SIZE);
+          const res = computePSD(tail, sr, {
+            targetN: MIND_MONITOR_FFT_SIZE,
+            window: "hamming",
+          });
+          if (res) {
+            const bins = resamplePsdToMindMonitorBins(res.psdDb, res.freqs);
+            vals =
+              bins
+                .slice(0, 4)
+                .map((v) => formatNumber(v, 1))
+                .join("  ") + "  …";
+          }
+        }
+        out.push({
+          mode: "A",
+          addr: `${prefix}/elements/raw_fft${ci}`,
+          tag: "129×f",
+          vals,
+          tone: "bands",
+        });
+      }
     }
 
     if (streams.bandPowers ?? true) {
@@ -198,7 +242,19 @@ export function OSCMonitor({
     }
 
     return out;
-  }, [prefix, streams, rel, abs, bandTraces, motion, eeg, batteryPct]);
+  }, [
+    prefix,
+    streams,
+    rel,
+    abs,
+    bandTraces,
+    motion,
+    eeg,
+    batteryPct,
+    rollingRaw,
+    mindMonitorMode,
+    packetCount,
+  ]);
 
   const liveTone =
     packetCount > 0 ? "text-emerald-400" : "text-zinc-500";

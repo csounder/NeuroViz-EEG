@@ -1,0 +1,30 @@
+{
+  "name": "muse-eeg-server",
+  "version": "1.0.0",
+  "description": "Muse 2/S EEG to Csound OSC bridge with web visualization",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server-enhanced.js",
+    "dev": "nodemon server-enhanced.js",
+    "legacy": "node server.js"
+  },
+  "keywords": [
+    "muse",
+    "eeg",
+    "csound",
+    "osc",
+    "websocket"
+  ],
+  "author": "Richard Boulanger",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.13.0",
+    "osc": "^2.4.5",
+    "dotenv": "^16.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.20"
+  }
+}

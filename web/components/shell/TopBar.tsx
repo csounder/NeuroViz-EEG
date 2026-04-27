@@ -8,6 +8,8 @@ import {
   FlaskConical,
   Menu,
   Play,
+  RefreshCw,
+  RotateCcw,
   SignalHigh,
   Square,
 } from "lucide-react";
@@ -36,23 +38,37 @@ const TITLES: Record<string, string> = {
   "/osc": "OSC Monitor",
   "/stats": "Performance Stats",
   "/settings": "Settings",
+  "/openbci-time-series": "OpenBCI-style TS",
+  "/butterfly": "Butterfly EEG",
+  "/spectrogram": "Spectrogram",
+  "/muselab": "MuseLab-style",
+  "/fft-smoothed": "Smoothed FFT",
+  "/mind-monitor": "Mind Monitor",
 };
 
 export function TopBar({ onOpenMenu }: { onOpenMenu: () => void }) {
   const pathname = usePathname() ?? "/";
   const title = TITLES[pathname] || "NeuroVis";
 
-  const { wsStatus, batteryPct, deviceName, settings, packetCount, simRunning } =
-    useNeuroStore(
-      useShallow((s) => ({
-        wsStatus: s.wsStatus,
-        batteryPct: s.batteryPct,
-        deviceName: s.deviceName,
-        settings: s.settings,
-        packetCount: s.packetCount,
-        simRunning: s.clientSim.running,
-      })),
-    );
+  const {
+    wsStatus,
+    batteryPct,
+    deviceName,
+    settings,
+    packetCount,
+    simRunning,
+    requestWsReconnect,
+  } = useNeuroStore(
+    useShallow((s) => ({
+      wsStatus: s.wsStatus,
+      batteryPct: s.batteryPct,
+      deviceName: s.deviceName,
+      settings: s.settings,
+      packetCount: s.packetCount,
+      simRunning: s.clientSim.running,
+      requestWsReconnect: s.requestWsReconnect,
+    })),
+  );
 
   const connectionTone =
     wsStatus === "open"
@@ -95,6 +111,26 @@ export function TopBar({ onOpenMenu }: { onOpenMenu: () => void }) {
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => requestWsReconnect()}
+            className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-emerald-400"
+            title="Reconnect WebSocket — close and open a fresh connection to the backend (ws://)"
+            aria-label="Reconnect WebSocket"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
+            title="Reload app — full page refresh in this browser tab (same as the browser reload button)"
+            aria-label="Reload page"
+          >
+            <RotateCcw className="h-4 w-4" />
+          </button>
+        </div>
         <SimulatorToggle
           simRunning={simRunning}
           serverSimRunning={Boolean(settings.simulatorMode)}

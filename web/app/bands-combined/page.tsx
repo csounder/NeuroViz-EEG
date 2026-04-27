@@ -5,7 +5,11 @@ import { Layers } from "lucide-react";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { BandTracesChart } from "@/components/charts/BandTracesChart";
 import { BandSelector } from "@/components/widgets/BandSelector";
-import { ScaleControl, type ScaleState } from "@/components/ui/ScaleControl";
+import {
+  ScaleControl,
+  TraceSpeedControl,
+  type ScaleState,
+} from "@/components/ui/ScaleControl";
 import { BAND_NAMES, type BandName } from "@/lib/types";
 
 export default function BandsCombinedPage() {
@@ -14,6 +18,7 @@ export default function BandsCombinedPage() {
     auto: true,
     value: 12,
   });
+  const [traceWindow, setTraceWindow] = React.useState(256);
 
   return (
     <div className="space-y-6">
@@ -34,18 +39,27 @@ export default function BandsCombinedPage() {
             height={520}
             autoScale={scale.auto}
             scaleValue={scale.value}
+            windowSamples={traceWindow}
           />
-          <ScaleControl
-            state={scale}
-            onChange={setScale}
-            label="dB span"
-            unit="dB"
-            bipolar
-            min={3}
-            max={40}
-            helpAuto="Vertical range fits current Mind Monitor–style dB (10·log10 µV² + offset)."
-            helpManual="Fixed ±dB half-span around the frame’s level center — lower = more vertical zoom."
-          />
+          <div className="flex flex-col gap-2 lg:flex-row">
+            <ScaleControl
+              className="flex-1"
+              state={scale}
+              onChange={setScale}
+              label="dB span"
+              unit="dB"
+              bipolar
+              min={3}
+              max={40}
+              helpAuto="Vertical range fits current Mind Monitor–style dB (10·log10 µV² + offset)."
+              helpManual="Fixed ±dB half-span around the frame’s level center — lower = more vertical zoom."
+            />
+            <TraceSpeedControl
+              className="flex-1"
+              value={traceWindow}
+              onChange={setTraceWindow}
+            />
+          </div>
         </CardBody>
       </Card>
 

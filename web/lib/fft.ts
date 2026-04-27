@@ -1,5 +1,5 @@
 // Lightweight radix-2 Cooley–Tukey FFT + PSD helpers.
-// Mirrors NeurOSC's approach:
+// Hamming-window spectral helpers for Mind Monitor–style displays:
 //   psd = |rFFT(sig)|^2 / N   →   mask to [min,max] Hz   →   10·log10(psd + ε)
 
 /** In-place iterative radix-2 FFT. `re` and `im` must have the same power-of-2 length. */
@@ -65,6 +65,15 @@ export function hannWindow(n: number): Float64Array {
   return w;
 }
 
+/** Hamming window (Mind Monitor “discrete frequency” / MuseIO-style FFT). */
+export function hammingWindow(n: number): Float64Array {
+  const w = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    w[i] = 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / Math.max(1, n - 1));
+  }
+  return w;
+}
+
 export interface FFTResult {
   /** Frequencies in Hz (length = N/2 + 1). */
   freqs: Float64Array;
@@ -77,7 +86,7 @@ export interface FFTResult {
  *
  * - Takes the trailing `N` samples (N = prev power of 2 of requested length).
  * - Removes the DC component (mean subtraction).
- * - Applies a Hann window.
+ * - Applies a Hann or Hamming window (`opts.window`, default Hann).
  * - Runs radix-2 FFT.
  * - PSD = |FFT(x)|² / N
  * - Converts to dB: 10·log10(psd + 1e-10)
@@ -91,7 +100,12 @@ export interface FFTResult {
 export function computePSD(
   samples: ArrayLike<number>,
   sampleRate: number,
-  opts?: { targetN?: number; minFreq?: number; maxFreq?: number },
+  opts?: {
+    targetN?: number;
+    minFreq?: number;
+    maxFreq?: number;
+    window?: "hann" | "hamming";
+  },
 ): FFTResult | null {
   const inLen = samples.length;
   if (inLen < 32 || sampleRate <= 0) return null;
@@ -108,7 +122,9 @@ export function computePSD(
   for (let i = 0; i < N; i++) mean += samples[start + i] ?? 0;
   mean /= N;
 
-  const win = hannWindow(N);
+  const winKind = opts?.window ?? "hann";
+  const win =
+    winKind === "hamming" ? hammingWindow(N) : hannWindow(N);
   for (let i = 0; i < N; i++) {
     re[i] = ((samples[start + i] ?? 0) - mean) * win[i];
   }

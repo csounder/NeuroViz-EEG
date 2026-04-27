@@ -8,6 +8,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server-enhanced.js",
+    "start:swift": "BRIDGE_MODE=swift node server-enhanced.js",
+    "start:athena": "BRIDGE_MODE=athena node server-enhanced.js",
     "electron": "electron .",
     "build-mac": "electron-builder --mac",
     "build-win": "electron-builder --win",

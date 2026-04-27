@@ -7,7 +7,9 @@ import type {
   BrainStateResult,
   DeviceInfo,
   EEGMessage,
+  EegTraceSource,
   NeuroVisSettings,
+  ResearchEventBridgeMessage,
   ServerMessage,
 } from "./types";
 import { BAND_NAMES } from "./types";
@@ -15,6 +17,16 @@ import { classifyBrainState } from "./utils";
 import { dsp } from "./dspPipeline";
 import { bandFilters } from "./bandFilters";
 import { recorder } from "./recorder";
+import type {
+  ResearchEyesContext,
+  ResearchEventLog,
+  ResearchEventSource,
+  ResearchStreamSample,
+} from "./researchTypes";
+import {
+  RESEARCH_EVENTS_MAX,
+  RESEARCH_TIMELINE_MAX,
+} from "./researchTypes";
 
 export type ConnectionStatus =
   | "idle"
@@ -29,11 +41,36 @@ interface FftSnapshot {
   timestamp: number;
 }
 
+interface MindMonitorKnownStreams {
+  horseshoe: number[] | null;
+  blink: boolean | null;
+  jawClench: boolean | null;
+  concentration: number | null;
+  mellow: number | null;
+  annotation: string | null;
+  rawFft: Record<string, number[]>;
+  updatedAt: number | null;
+}
+
 interface NeuroState {
   // WebSocket connection
   wsStatus: ConnectionStatus;
   wsUrl: string;
+  /** Increment to force `useNeuroVisSocket` to tear down and open a fresh WebSocket. */
+  wsReconnectEpoch: number;
   lastMessageAt: number | null;
+
+  /**
+   * Mind Monitor compatibility: Hamming FFT / 0–110 Hz bins, MuseIO `raw_fft*`
+   * OSC, and Mind Monitor band edges on the biquad trace bank.
+   */
+  mindMonitorMode: boolean;
+
+  /**
+   * Which samples feed `rollingRaw`, band-trace biquads, and the recorder for EEG packets.
+   * Does not change server OSC or server-computed band powers.
+   */
+  eegTraceSource: EegTraceSource;
 
   // Device / settings
   devices: DeviceInfo[];
@@ -63,9 +100,17 @@ interface NeuroState {
   latestBandTraces: Record<BandName, number[]> | null;
   latestBandsAbs: BandPowers | null;
   latestBandsRel: BandPowers | null;
+  latestBandsAt: number | null;
   bandHistory: { t: number; rel: BandPowers }[]; // last N seconds
   fft: FftSnapshot | null;
   brainState: BrainStateResult | null;
+  /** Smoothed estimate of EEG packet rate (Hz) from inter-arrival times (dashboard stream). */
+  estimatedEegHz: number | null;
+
+  /** In-browser stream for Research event-locked views & rolling export (~WebSocket EEG rate). */
+  researchTimeline: ResearchStreamSample[];
+  researchEvents: ResearchEventLog[];
+  researchEyesContext: ResearchEyesContext;
 
   // Motion
   motion: {
@@ -74,6 +119,11 @@ interface NeuroState {
     ppg: number[] | null;
     fnirs: number[] | null;
   };
+  mindMonitorOsc: {
+    addresses: Record<string, { args: unknown[]; timestamp: number; count: number }>;
+    recent: { address: string; args: unknown[]; timestamp: number }[];
+  };
+  mindMonitor: MindMonitorKnownStreams;
 
   // Calibration
   calibration: {
@@ -86,6 +136,10 @@ interface NeuroState {
 
   // Actions
   setWsStatus: (s: ConnectionStatus) => void;
+  /** Close and reconnect the app WebSocket (same tab). */
+  requestWsReconnect: () => void;
+  setMindMonitorMode: (enabled: boolean) => void;
+  setEegTraceSource: (source: EegTraceSource) => void;
   ingest: (msg: ServerMessage) => void;
   setDevices: (devices: DeviceInfo[]) => void;
   setActiveDevice: (name: string | null) => void;
@@ -99,6 +153,11 @@ interface NeuroState {
     sensor: "accel" | "gyro" | "ppg" | "fnirs",
     values: number[],
   ) => void;
+
+  logResearchEvent: (label: string, source: ResearchEventSource, detail?: string) => void;
+  clearResearchTimeline: () => void;
+  clearResearchEvents: () => void;
+  setResearchEyesContext: (c: ResearchEyesContext) => void;
 }
 
 const ROLLING_SAMPLES = 1024; // ~4 seconds at 256Hz
@@ -108,6 +167,19 @@ function pushRing<T>(arr: T[], value: T, max: number): T[] {
   const next = arr.length >= max ? arr.slice(arr.length - max + 1) : arr.slice();
   next.push(value);
   return next;
+}
+
+const EEG_TRACE_LS_KEY = "neurovis.eegTraceSource";
+
+function readStoredEegTraceSource(): EegTraceSource {
+  if (typeof window === "undefined") return "browser_dsp";
+  try {
+    const v = localStorage.getItem(EEG_TRACE_LS_KEY);
+    if (v === "server_dsp" || v === "device_raw" || v === "browser_dsp") return v;
+  } catch {
+    /* ignore */
+  }
+  return "browser_dsp";
 }
 
 /** Smooth WebSocket EEG rate so biquad bandpass edges stay sane (20–512 Hz). */
@@ -144,6 +216,47 @@ function appendBandTraces(
   return next;
 }
 
+function toNumbers(args: unknown[]) {
+  return args.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+}
+
+function deriveMindMonitorKnownStream(
+  current: MindMonitorKnownStreams,
+  address: string,
+  args: unknown[],
+  timestamp: number,
+): MindMonitorKnownStreams {
+  const nums = toNumbers(args);
+  if (address === "/muse/elements/horseshoe") {
+    return { ...current, horseshoe: nums.slice(0, 4), updatedAt: timestamp };
+  }
+  if (address === "/muse/elements/blink") {
+    return { ...current, blink: Boolean(nums[0]), updatedAt: timestamp };
+  }
+  if (address === "/muse/elements/jaw_clench") {
+    return { ...current, jawClench: Boolean(nums[0]), updatedAt: timestamp };
+  }
+  if (address === "/muse/elements/experimental/concentration") {
+    return { ...current, concentration: nums[0] ?? null, updatedAt: timestamp };
+  }
+  if (address === "/muse/elements/experimental/mellow") {
+    return { ...current, mellow: nums[0] ?? null, updatedAt: timestamp };
+  }
+  if (address === "/muse/annotation") {
+    return { ...current, annotation: String(args[0] ?? ""), updatedAt: timestamp };
+  }
+  const rawFft = address.match(/^\/muse\/elements\/raw_fft(\d*)$/);
+  if (rawFft) {
+    const channel = rawFft[1] || "all";
+    return {
+      ...current,
+      rawFft: { ...current.rawFft, [channel]: nums },
+      updatedAt: timestamp,
+    };
+  }
+  return current;
+}
+
 /** Call when starting the browser simulator so WS rate estimates don't skew biquads. */
 export function resetBandFilterStreamEstimator() {
   lastEegTimestampMs = null;
@@ -154,7 +267,12 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
   wsStatus: "idle",
   wsUrl:
     process.env.NEXT_PUBLIC_NEUROVIS_WS_URL || "ws://localhost:8080",
+  wsReconnectEpoch: 0,
   lastMessageAt: null,
+
+  mindMonitorMode: false,
+
+  eegTraceSource: readStoredEegTraceSource(),
 
   devices: [],
   activeDeviceName: null,
@@ -176,11 +294,28 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
   latestBandTraces: null,
   latestBandsAbs: null,
   latestBandsRel: null,
+  latestBandsAt: null,
   bandHistory: [],
   fft: null,
   brainState: null,
+  estimatedEegHz: null,
+
+  researchTimeline: [],
+  researchEvents: [],
+  researchEyesContext: "unspecified",
 
   motion: { accel: null, gyro: null, ppg: null, fnirs: null },
+  mindMonitorOsc: { addresses: {}, recent: [] },
+  mindMonitor: {
+    horseshoe: null,
+    blink: null,
+    jawClench: null,
+    concentration: null,
+    mellow: null,
+    annotation: null,
+    rawFft: {},
+    updatedAt: null,
+  },
 
   clientSim: {
     running: false,
@@ -200,6 +335,18 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
   },
 
   setWsStatus: (s) => set({ wsStatus: s }),
+  requestWsReconnect: () =>
+    set((st) => ({ wsReconnectEpoch: st.wsReconnectEpoch + 1 })),
+  setMindMonitorMode: (enabled) => set({ mindMonitorMode: enabled }),
+
+  setEegTraceSource: (eegTraceSource) => {
+    try {
+      localStorage.setItem(EEG_TRACE_LS_KEY, eegTraceSource);
+    } catch {
+      /* ignore */
+    }
+    set({ eegTraceSource });
+  },
 
   setDevices: (devices) => set({ devices }),
   setActiveDevice: (name) => set({ activeDeviceName: name }),
@@ -216,6 +363,19 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
       if (v === undefined || v === null) return buf;
       return pushRing(buf, v, ROLLING_SAMPLES);
     });
+    tickBandFilterSampleRate(now);
+    const st0 = get();
+    const timelineSample: ResearchStreamSample = {
+      wallMs: now,
+      eeg: [
+        Number(raw?.[0] ?? 0),
+        Number(raw?.[1] ?? 0),
+        Number(raw?.[2] ?? 0),
+        Number(raw?.[3] ?? 0),
+      ],
+      bandsRel: st0.latestBandsRel,
+      bandsAbs: st0.latestBandsAbs,
+    };
     set((st) => ({
       latestEEG: {
         type: "eeg",
@@ -227,8 +387,29 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
       deviceName: "CLIENT SIM",
       packetCount: st.packetCount + 1,
       lastMessageAt: now,
+      estimatedEegHz: Math.round(smoothedBandFilterFs * 10) / 10,
+      researchTimeline: pushRing(st.researchTimeline, timelineSample, RESEARCH_TIMELINE_MAX),
     }));
   },
+
+  logResearchEvent: (label, source, detail) =>
+    set((st) => ({
+      researchEvents: pushRing(
+        st.researchEvents,
+        {
+          id: `ev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          wallMs: Date.now(),
+          label: label.slice(0, 240),
+          source,
+          detail: detail?.slice(0, 600),
+        },
+        RESEARCH_EVENTS_MAX,
+      ),
+    })),
+
+  clearResearchTimeline: () => set({ researchTimeline: [] }),
+  clearResearchEvents: () => set({ researchEvents: [] }),
+  setResearchEyesContext: (researchEyesContext) => set({ researchEyesContext }),
   feedSimBandTraces: (perBand) => {
     const next = appendBandTraces(get().rollingBandRaw, perBand);
     set({ rollingBandRaw: next, latestBandTraces: { ...perBand } });
@@ -243,6 +424,7 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
     set({
       latestBandsAbs: absolute,
       latestBandsRel: relative,
+      latestBandsAt: now,
       bandHistory: history,
       brainState: classifyBrainState(relative),
       lastMessageAt: now,
@@ -269,21 +451,29 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
       }
       case "eeg": {
         const m = msg as EEGMessage;
-        // Real-device EEG usually arrives throttled (10 Hz), so filters
-        // designed for 256 Hz would be wrong — CAR is the one stage that
-        // works at any rate, so we apply only when enabled.
+        const traceMode = get().eegTraceSource;
+        // Choose the µV vector that drives charts / band traces:
+        // - server_dsp: Node dsp.js output (matches Research server toggles); falls back to raw.
+        // - device_raw: bridge scaling only, no server filtering.
+        // - browser_dsp: apply web/lib/dspPipeline.ts to raw (legacy default).
+        let pipelineInput = m.raw;
+        if (traceMode === "server_dsp") {
+          pipelineInput =
+            m.processed && m.processed.length >= 4 ? m.processed : m.raw;
+        } else if (traceMode === "device_raw") {
+          pipelineInput = m.raw;
+        }
         const processed =
-          m.raw && dsp.getConfig().masterEnabled && dsp.getConfig().carEnabled
-            ? dsp.processEEG(m.raw).values
-            : m.raw;
+          pipelineInput &&
+          traceMode === "browser_dsp" &&
+          dsp.getConfig().masterEnabled &&
+          dsp.getConfig().carEnabled
+            ? dsp.processEEG(pipelineInput).values
+            : pipelineInput;
         if (processed && recorder.status().recording) {
-          recorder.pushEEG(
-            processed[0] ?? 0,
-            processed[1] ?? 0,
-            processed[2] ?? 0,
-            processed[3] ?? 0,
-            dsp.lastArtifact ? 1 : 0,
-          );
+          const n = recorder.getActiveEegChannelCount();
+          const row = Array.from({ length: n }, (_, i) => Number(processed[i]) || 0);
+          recorder.pushEEGSample(row, dsp.lastArtifact ? 1 : 0);
         }
         const rolling = get().rollingRaw.map((buf, ch) => {
           const v = processed?.[ch];
@@ -312,6 +502,33 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
           latestBandTraces = { ...perBand };
         }
 
+        const serverFft = m.fft as { freqs?: unknown; magnitudes?: unknown } | undefined;
+        const validServerFft =
+          serverFft &&
+          Array.isArray(serverFft.freqs) &&
+          serverFft.freqs.length > 0 &&
+          Array.isArray(serverFft.magnitudes) &&
+          serverFft.magnitudes.length > 0;
+
+        const pre = get();
+        const wallMsForSample = Number(m.timestamp) || now;
+        const eegTuple: [number, number, number, number] = [
+          Number(processed?.[0] ?? m.raw?.[0] ?? 0),
+          Number(processed?.[1] ?? m.raw?.[1] ?? 0),
+          Number(processed?.[2] ?? m.raw?.[2] ?? 0),
+          Number(processed?.[3] ?? m.raw?.[3] ?? 0),
+        ];
+        const ppgSnap = pre.motion.ppg?.filter((x) => Number.isFinite(x)) ?? [];
+        const fnSnap = pre.motion.fnirs?.filter((x) => Number.isFinite(x)) ?? [];
+        const timelineSample: ResearchStreamSample = {
+          wallMs: wallMsForSample,
+          eeg: eegTuple,
+          bandsRel: pre.latestBandsRel,
+          bandsAbs: pre.latestBandsAbs,
+          ppg: ppgSnap.length ? [...ppgSnap] : null,
+          fnirs: fnSnap.length ? [...fnSnap] : null,
+        };
+
         set({
           latestEEG: m,
           rollingRaw: rolling,
@@ -319,23 +536,26 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
           latestBandTraces,
           deviceName: m.deviceName ?? get().deviceName,
           packetCount: m.packetCount ?? get().packetCount,
-          fft: m.fft
+          fft: validServerFft
             ? {
-                freqs: m.fft.freqs,
-                magnitudes: m.fft.magnitudes,
+                freqs: serverFft.freqs as number[],
+                magnitudes: serverFft.magnitudes as number[][],
                 timestamp: m.timestamp ?? now,
               }
             : get().fft,
           lastMessageAt: now,
+          estimatedEegHz: Math.round(smoothedBandFilterFs * 10) / 10,
+          researchTimeline: pushRing(
+            pre.researchTimeline,
+            timelineSample,
+            RESEARCH_TIMELINE_MAX,
+          ),
         });
         break;
       }
       case "bandPowers": {
         const m = msg as any;
-        const abs = dsp.normalizeBandPowers(
-          m.absolute as BandPowers,
-          "ALL",
-        );
+        const abs = m.absolute as BandPowers;
         const rel = m.relative as BandPowers;
         const state = classifyBrainState(rel);
         const history = pushRing(
@@ -349,6 +569,7 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
         set({
           latestBandsAbs: abs,
           latestBandsRel: rel,
+          latestBandsAt: Number(m.timestamp) || now,
           bandHistory: history,
           brainState: state,
           lastMessageAt: now,
@@ -367,6 +588,55 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
           motion: { ...st.motion, [sensor]: m.values ?? null },
           lastMessageAt: now,
         }));
+        break;
+      }
+      case "mindMonitorOsc": {
+        const m = msg as any;
+        const address = typeof m.address === "string" ? m.address : "";
+        if (!address) break;
+        const args = Array.isArray(m.args) ? m.args : [];
+        const timestamp = Number(m.timestamp) || now;
+        set((st) => {
+          const previous = st.mindMonitorOsc.addresses[address];
+          return {
+            mindMonitor: deriveMindMonitorKnownStream(
+              st.mindMonitor,
+              address,
+              args,
+              timestamp,
+            ),
+            mindMonitorOsc: {
+              addresses: {
+                ...st.mindMonitorOsc.addresses,
+                [address]: {
+                  args,
+                  timestamp,
+                  count: (previous?.count ?? 0) + 1,
+                },
+              },
+              recent: pushRing(
+                st.mindMonitorOsc.recent,
+                { address, args, timestamp },
+                80,
+              ),
+            },
+            lastMessageAt: now,
+          };
+        });
+        const low = address.toLowerCase();
+        if (
+          low.includes("annotation") ||
+          low.includes("/marker") ||
+          low.includes("stimulus") ||
+          low.includes("trial")
+        ) {
+          queueMicrotask(() => {
+            const gist = args.length
+              ? args.map((x: unknown) => String(x)).join(" ").slice(0, 96)
+              : address;
+            get().logResearchEvent(`osc:${gist || address}`, "osc", address.slice(0, 200));
+          });
+        }
         break;
       }
       case "battery": {
@@ -394,16 +664,33 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
       }
       case "calibration_status": {
         const m = msg as any;
+        const p =
+          typeof m.progress === "number"
+            ? m.progress
+            : (m.percentComplete ?? 0) / 100;
         set({
           calibration: {
             isCalibrating: Boolean(m.isCalibrating),
-            percent: m.percentComplete ?? 0,
+            percent: Math.round(Math.max(0, Math.min(1, p)) * 100),
             samples: m.samplesCollected ?? 0,
             secondsElapsed: m.secondsElapsed ?? 0,
             secondsTotal: m.secondsTotal ?? 90,
           },
           lastMessageAt: now,
         });
+        break;
+      }
+      case "research_event": {
+        const m = msg as ResearchEventBridgeMessage;
+        const label =
+          typeof m.label === "string" && m.label.trim()
+            ? m.label.trim().slice(0, 240)
+            : "research_event";
+        const detail =
+          typeof m.detail === "string" ? m.detail.slice(0, 600) : undefined;
+        const src = m.source === "bridge" ? "bridge" : "http";
+        get().logResearchEvent(label, src, detail);
+        set({ lastMessageAt: now });
         break;
       }
       default:

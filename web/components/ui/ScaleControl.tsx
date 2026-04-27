@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * AUTO toggle + log-scaled slider for controlling a display's Y-axis range.
- * Ported from NeurOSC `scale-slider` / `auto-scale-toggle`.
+ * Linear / log scale slider for trace amplitude.
  *
  * Log mapping between slider position `t∈[0,100]` and scale value `v∈[min,max]`:
  *     v = min · (max/min)^(t/100)         → sliderToValue
@@ -18,6 +18,69 @@ import { cn } from "@/lib/utils";
 export interface ScaleState {
   auto: boolean;
   value: number;
+}
+
+export function TraceSpeedControl({
+  value,
+  onChange,
+  min = 64,
+  max = 1024,
+  sampleRate = 256,
+  label = "Trace window",
+  className,
+  compact = false,
+}: {
+  value: number;
+  onChange: (next: number) => void;
+  min?: number;
+  max?: number;
+  sampleRate?: number;
+  label?: React.ReactNode;
+  className?: string;
+  compact?: boolean;
+}) {
+  const clamped = Math.max(min, Math.min(max, value));
+  const seconds = clamped / sampleRate;
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-4 rounded-md border border-zinc-800/70 bg-zinc-900/40 px-3 py-2",
+        compact && "gap-3 px-2 py-1.5",
+        className,
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+          {label}
+        </span>
+        <HelpTip
+          content={
+            <div className="space-y-1">
+              <div>
+                Shorter windows make the traces move faster and reveal rapid EEG motion.
+              </div>
+              <div>Longer windows show more history but look slower.</div>
+            </div>
+          }
+        />
+      </div>
+      <div className="flex flex-1 items-center gap-2">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={16}
+          value={clamped}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="neurovis-scale-slider h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-800 accent-emerald-500"
+        />
+        <span className="min-w-[86px] text-right font-mono text-[11px] tabular-nums text-zinc-200">
+          {seconds.toFixed(seconds < 1 ? 2 : 1)}s
+        </span>
+      </div>
+    </div>
+  );
 }
 
 export function ScaleControl({

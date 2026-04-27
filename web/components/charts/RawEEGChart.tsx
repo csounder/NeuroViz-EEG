@@ -5,27 +5,43 @@ import { useNeuroStore } from "@/lib/store";
 
 const CHANNEL_LABELS = ["TP9", "AF7", "AF8", "TP10"];
 const CHANNEL_COLORS = ["#22d3ee", "#a78bfa", "#f472b6", "#fbbf24"];
+/** OpenBCI GUI–like accent traces (green / teal family). */
+const OPENBCI_LANE_COLORS = [
+  "#69f0ae",
+  "#64ffda",
+  "#b9f6ca",
+  "#1de9b6",
+];
 
 /**
  * Live 4-channel EEG time-series canvas chart.
- * Renders on a rolling 4-second window at 60 fps, reading the ring buffers
+ * Renders on a rolling window at 60 fps, reading the ring buffers
  * owned by the zustand store.
  */
 export function RawEEGChart({
   height = 360,
   showChannelLabels = true,
+  variant = "default",
   yRange,
   autoScale = true,
   scaleValue,
+  windowSamples = 256,
 }: {
   height?: number;
   showChannelLabels?: boolean;
+  /**
+   * `openbci` — high-contrast dark canvas and gutter labels reminiscent of the
+   * OpenBCI GUI time-series widget (multi-channel scrolling traces).
+   */
+  variant?: "default" | "openbci";
   /** Legacy prop — if set, forces manual scale */
   yRange?: number;
   /** If true, each lane auto-ranges to its own signal. Overrides scaleValue. */
   autoScale?: boolean;
   /** Manual ± scale (µV) when autoScale is false */
   scaleValue?: number;
+  /** Number of most-recent samples to draw. 256 ≈ 1s at Muse native rate. */
+  windowSamples?: number;
 }) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -52,28 +68,39 @@ export function RawEEGChart({
     const ro = new ResizeObserver(resize);
     ro.observe(container);
 
+    const padL = variant === "openbci" ? 44 : 0;
+    const plotW = () => Math.max(8, canvas.clientWidth - padL);
+
     const draw = () => {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       ctx.clearRect(0, 0, w, h);
 
-      // Background gradient
-      const bg = ctx.createLinearGradient(0, 0, 0, h);
-      bg.addColorStop(0, "rgba(24,24,27,0.6)");
-      bg.addColorStop(1, "rgba(9,9,11,0.3)");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, w, h);
+      const pw = plotW();
+
+      if (variant === "openbci") {
+        ctx.fillStyle = "#070708";
+        ctx.fillRect(0, 0, w, h);
+      } else {
+        const bg = ctx.createLinearGradient(0, 0, 0, h);
+        bg.addColorStop(0, "rgba(24,24,27,0.6)");
+        bg.addColorStop(1, "rgba(9,9,11,0.3)");
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, w, h);
+      }
 
       const { rollingRaw } = useNeuroStore.getState();
       const numCh = 4;
       const laneH = h / numCh;
 
-      // Grid — vertical (time) + horizontal (zero baseline per lane)
-      ctx.strokeStyle = "rgba(63,63,70,0.25)";
+      ctx.strokeStyle =
+        variant === "openbci"
+          ? "rgba(0, 230, 118, 0.1)"
+          : "rgba(63,63,70,0.25)";
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (let i = 1; i < 8; i++) {
-        const x = (i / 8) * w;
+        const x = padL + (i / 8) * pw;
         ctx.moveTo(x, 0);
         ctx.lineTo(x, h);
       }
@@ -83,27 +110,38 @@ export function RawEEGChart({
         const laneTop = ch * laneH;
         const laneMid = laneTop + laneH / 2;
 
-        // Baseline
-        ctx.strokeStyle = "rgba(63,63,70,0.5)";
+        ctx.strokeStyle =
+          variant === "openbci"
+            ? "rgba(105, 240, 174, 0.35)"
+            : "rgba(63,63,70,0.5)";
         ctx.setLineDash([2, 4]);
         ctx.beginPath();
-        ctx.moveTo(0, laneMid);
+        ctx.moveTo(padL, laneMid);
         ctx.lineTo(w, laneMid);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Channel label
         if (showChannelLabels) {
-          ctx.fillStyle = CHANNEL_COLORS[ch];
           ctx.font =
             "500 10px ui-monospace, SFMono-Regular, Menlo, monospace";
-          ctx.fillText(CHANNEL_LABELS[ch], 8, laneTop + 14);
+          if (variant === "openbci") {
+            ctx.fillStyle = OPENBCI_LANE_COLORS[ch];
+            ctx.fillText(`${ch + 1}`, 6, laneTop + 14);
+            ctx.fillStyle = "rgba(161,161,170,0.75)";
+            ctx.fillText(CHANNEL_LABELS[ch], 20, laneTop + 14);
+          } else {
+            ctx.fillStyle = CHANNEL_COLORS[ch];
+            ctx.fillText(CHANNEL_LABELS[ch], 8, laneTop + 14);
+          }
         }
 
-        const buf = rollingRaw[ch];
+        const fullBuf = rollingRaw[ch];
+        const buf =
+          fullBuf && fullBuf.length > windowSamples
+            ? fullBuf.slice(-windowSamples)
+            : fullBuf;
         if (!buf || buf.length < 2) continue;
 
-        // Determine lane scale: manual override (yRange / scaleValue) or auto
         const manualFixed = yRange ?? (autoScale ? undefined : scaleValue);
         let maxAbs = manualFixed ?? 0;
         if (manualFixed === undefined) {
@@ -115,13 +153,13 @@ export function RawEEGChart({
           maxAbs *= 1.1;
         }
 
-        // Trace
-        ctx.strokeStyle = CHANNEL_COLORS[ch];
-        ctx.lineWidth = 1.25;
+        ctx.strokeStyle =
+          variant === "openbci" ? OPENBCI_LANE_COLORS[ch] : CHANNEL_COLORS[ch];
+        ctx.lineWidth = variant === "openbci" ? 1.05 : 1;
         ctx.beginPath();
-        const step = w / (buf.length - 1);
+        const step = pw / (buf.length - 1);
         for (let i = 0; i < buf.length; i++) {
-          const x = i * step;
+          const x = padL + i * step;
           const norm = buf[i] / maxAbs;
           const y = laneMid - norm * (laneH * 0.42);
           if (i === 0) ctx.moveTo(x, y);
@@ -138,7 +176,15 @@ export function RawEEGChart({
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       ro.disconnect();
     };
-  }, [height, showChannelLabels, yRange, autoScale, scaleValue]);
+  }, [
+    height,
+    showChannelLabels,
+    variant,
+    yRange,
+    autoScale,
+    scaleValue,
+    windowSamples,
+  ]);
 
   return (
     <div ref={containerRef} className="relative w-full overflow-hidden">

@@ -18,6 +18,34 @@ This document summarizes the React/Next.js migration and related work, and inclu
 
 ---
 
+## 2026-04-26 — Muse BLE backends, Athena bridge, device UX
+
+### Two BLE backends (one active at a time)
+| Backend | When to use | How to start |
+|--------|-------------|--------------|
+| **Swift MuseBridge** (`./MuseBridge`, default) | Muse 2 / 3 / S, LibMuse GATT | `npm start` or `npm run start:swift` |
+| **Python Athena** (`scripts/athena_ble_bridge.py`) | Muse S Athena only (GATT notify **`273e0013`**) | `BRIDGE_MODE=athena` or `npm run start:athena` |
+
+- **Muse 2** (e.g. BLE name `Muse-33C1`) does **not** expose `273e0013`. The Athena script **skips** those devices on scan and **rejects** connect; use **Swift**.
+- **Runtime switch** without restarting Node: **`GET /api/bridge`**, **`POST /api/bridge/mode`** with body `{ "mode": "swift" | "athena" }`. Kills the current subprocess, clears the device list, respawns the other bridge (`suppressBridgeAutoRestart` avoids the auto-respawn race). **UI:** **Settings → Muse BLE backend** (dropdown).
+- **EEG `deviceName`:** `broadcastEEGData` prefers `currentDevice.displayName` (e.g. `Muse-33C1 (Muse 2)`) over bare BLE / LibMuse packet strings.
+- **Athena Python:** auto TLV header skip, RX **reassembly** for split notifications, **async stdout queue** so BLE callbacks don’t block on a full pipe; bridge **`type:error`** JSON is logged and forwarded via **`handleStatus`** to WebSocket clients. **`requirements-athena.txt`** + Bleak.
+- **Server:** startup **banner** shows active bridge; `settings.inputFormat` forced to **`microvolts`** for Athena path, reset to **`auto`** when switching back to Swift.
+
+### Research / web fixes
+- **`web/lib/researchDeviceProfile.ts`:** Muse 2 class = **PPG + IMU**, **no fNIRS**; serial-style BLE names; Vitest in `researchDeviceProfile.test.ts` / `recorderExportSchema.test.ts`.
+- **Hydration:** `CALIBRATION_STATE_HYDRATION_SAFE` in `calibration.ts`; **`QuickActions`** initial state avoids SSR/client mismatch on baseline icon.
+
+### Binary / repo
+- **`MuseBridge`** in repo root is a **~6 MB** Mach-O universal (arm64 + x86_64) LibMuse helper; replace via your Xcode/Swift build if needed.
+
+### Where we’re leaving off
+- **Athena:** If firmware adds unknown sensor TLV tags, extend `TAG_PAYLOAD_BYTES` / decoder in `scripts/athena_ble_bridge.py` using captured hex.
+- **Legacy `public/`** HTML: optional; primary UI is **`web/`** Next.js (port **3001** with default dev config).
+- **`.env`:** `BRIDGE_MODE` sets **initial** mode only; in-app / API switch overrides until the next full Node restart.
+
+---
+
 ## Major features (implemented)
 
 - **Shell:** Sidebar, TopBar, dark theme, navigation for all main routes.
@@ -76,9 +104,9 @@ This document summarizes the React/Next.js migration and related work, and inclu
 ```
 Project: NeuroVis — GitHub https://github.com/csounder/NeuroViz-EEG (local path may be /Users/richardboulanger/dB-Studio/NeuroVis). Next.js app in web/ (port 3001), API/WebSocket/OSC from server-enhanced.js (port 3000, WS 8080).
 
-Read first: web/lib/store.ts, web/lib/clientSim.ts, web/lib/simulator.ts, web/components/charts/BandTracesChart.tsx, web/lib/bandTraceDb.ts, web/lib/displays.tsx, web/components/shell/Sidebar.tsx, web/components/shell/TopBar.tsx. Repo handoff: docs/HANDOFF.md.
+Read first: web/lib/store.ts, web/lib/clientSim.ts, web/lib/simulator.ts, web/components/charts/BandTracesChart.tsx, web/lib/bandTraceDb.ts, web/lib/displays.tsx, web/components/shell/Sidebar.tsx, web/components/shell/TopBar.tsx, web/lib/researchDeviceProfile.ts, scripts/athena_ble_bridge.py (if BLE). Repo handoff: docs/HANDOFF.md (see § 2026-04-26 for Swift vs Athena, /api/bridge, Muse 2).
 
-What exists: Browser simulator singleton (clientSim) feeding Zustand + optional OSC via WS osc_send; band-pass traces in rollingBandRaw from sim and from ingest EEG; Combined bands = BandTracesChart layout="overlay" (4 ch per band, dB scale); Multichannel bands = layout="stacked" (one row per band, electrode colors); Mind Monitor–style dB via bandTraceDb; dual/quad layouts; DSP pipeline; recordings; presets; OSC monitor.
+What exists: Browser simulator singleton (clientSim) feeding Zustand + optional OSC via WS osc_send; band-pass traces in rollingBandRaw from sim and from ingest EEG; Combined bands = BandTracesChart layout="overlay" (4 ch per band, dB scale); Multichannel bands = layout="stacked" (one row per band, electrode colors); Mind Monitor–style dB via bandTraceDb; dual/quad layouts; DSP pipeline; recordings; presets; OSC monitor; **dual Muse BLE backends** (Swift default, Python Athena optional) with **runtime switch** and Settings UI; research device heuristics + Vitest.
 
 Constraints: Match existing patterns; keep diffs focused; do not expand scope beyond what I ask.
 
@@ -87,4 +115,4 @@ My next task: [describe your task here]
 
 ---
 
-*Last updated from project handoff notes.*
+*Last updated: 2026-04-26 — BLE backends, Athena bridge hardening, handoff for GitHub push.*

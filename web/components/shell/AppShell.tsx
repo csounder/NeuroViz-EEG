@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
+import { MindMonitorSync } from "./MindMonitorSync";
 import { useNeuroVisSocket } from "@/lib/useWebSocket";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -13,6 +14,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="relative mx-auto flex min-h-screen max-w-[1600px]">
+      <MindMonitorSync />
       <Sidebar mobileOpen={mobileOpen} onClose={() => setMobileOpen(false)} />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar onOpenMenu={() => setMobileOpen(true)} />

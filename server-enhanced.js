@@ -36,9 +36,37 @@ const config = {
   oscHost: process.env.OSC_HOST || "127.0.0.1",
   oscPort: process.env.OSC_PORT || 7400,
   oscPrefix: process.env.OSC_PREFIX || "/muse",
+  bridgeMode: process.env.BRIDGE_MODE || "swift",
   swiftBridgePath: process.env.BRIDGE_PATH || "./MuseBridge",
+  athenaBridgePath:
+    process.env.ATHENA_BRIDGE_PATH || "./scripts/athena_ble_bridge.py",
   maxBufferSize: 512,
+  verbose: process.env.DEBUG_VERBOSE === "1",
 };
+
+(function logBridgeModeBanner() {
+  const line = "━".repeat(58);
+  const mode = config.bridgeMode;
+  console.log(`\n${line}`);
+  console.log(`  NeuroVis BLE bridge: ${String(mode).toUpperCase()}`);
+  if (mode === "athena") {
+    console.log(
+      "  • Python path = Muse S Athena only (needs 273e0013). Muse 2 / Muse-33xx are hidden.",
+    );
+    console.log(
+      "  • For Muse 2 / LibMuse:  npm run start:swift   or delete BRIDGE_MODE from .env",
+    );
+  } else {
+    console.log(
+      "  • Swift MuseBridge (default) — Muse 2, Muse 3, Muse S, etc.",
+    );
+  }
+  console.log(`${line}\n`);
+})();
+
+function verboseLog(...args) {
+  if (config.verbose) console.log(...args);
+}
 
 // Express app
 const app = express();
@@ -81,8 +109,74 @@ wss.on("error", (err) => {
   console.error(`❌ WebSocket server error: ${err.message}`);
 });
 
+// ── Research markers: HTTP → all WebSocket clients (Next.js / legacy UI) ──
+function broadcastResearchEvent(payload) {
+  const label = String(payload?.label ?? "").trim().slice(0, 240);
+  if (!label) return { ok: false, error: "label_required", delivered_to: 0 };
+  const detail =
+    payload.detail != null ? String(payload.detail).slice(0, 600) : undefined;
+  const source = payload.source === "bridge" ? "bridge" : "http";
+  const msg = JSON.stringify({
+    type: "research_event",
+    label,
+    detail,
+    source,
+    wallMs: Date.now(),
+  });
+  let delivered = 0;
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(msg);
+      delivered++;
+    }
+  });
+  return { ok: true, delivered_to: delivered };
+}
+
+app.options("/api/research-event", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, X-NeuroVis-Research-Token",
+  );
+  res.sendStatus(204);
+});
+
+app.post("/api/research-event", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  const secret = process.env.RESEARCH_EVENT_SECRET;
+  if (
+    secret &&
+    String(req.get("x-neurovis-research-token") || "") !== secret
+  ) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+  const label = req.body?.label;
+  if (typeof label !== "string" || !label.trim()) {
+    return res.status(400).json({
+      ok: false,
+      error: "label_required",
+      hint: "JSON body: { label, detail? }",
+    });
+  }
+  const out = broadcastResearchEvent({
+    label,
+    detail: req.body?.detail,
+    source: req.body?.source,
+  });
+  if (!out.ok) {
+    return res.status(400).json(out);
+  }
+  res.json({
+    ok: true,
+    delivered_to: out.delivered_to,
+    ws_clients: wss.clients.size,
+  });
+});
+
 // ============================================================================
-// Device Model Detection - Muse 2, Muse S, Muse S Athena
+// Device Model Detection - Muse 2, Muse 3, Muse S, Muse S Athena, OpenBCI Ganglion / Cyton / Ultra Cortex
 // ============================================================================
 
 // LibMuse model codes (from IXNMuseVersion enum)
@@ -93,12 +187,14 @@ const MODEL_CODES = {
   5: "Muse S",
   6: "Muse S Athena",
   7: "Muse S Athena (v7)",
+  8: "Muse 3",
 };
 
 const DEVICE_MODELS = {
   MUSE_2: "Muse 2",
   MUSE_S: "Muse S",
   MUSE_S_ATHENA: "Muse S (Athena)",
+  MUSE_3: "Muse 3",
 };
 
 const DEVICE_SPECS = {
@@ -107,10 +203,11 @@ const DEVICE_SPECS = {
     eegChannels: 4,
     channelNames: ["TP9", "AF7", "AF8", "TP10"],
     hasMotion: true,
-    hasPPG: false,
+    hasPPG: true,
     hasfNIRS: false,
     eegSampleRate: 256,
     motionSampleRate: 52,
+    ppgSampleRate: 64,
     eegResolution: 12, // bits
     ppgResolution: 16,
     // Voltage scaling specs
@@ -133,6 +230,23 @@ const DEVICE_SPECS = {
     ppgResolution: 16,
     // Voltage scaling specs
     eegVoltageRange: 2.0, // mV peak-to-peak
+    eegCoupling: "AC",
+    eegMicrovoltsPerBit: 2000 / Math.pow(2, 12),
+    defaultYRange: [-200, 200],
+  },
+  [DEVICE_MODELS.MUSE_3]: {
+    name: "Muse 3",
+    eegChannels: 4,
+    channelNames: ["TP9", "AF7", "AF8", "TP10"],
+    hasMotion: true,
+    hasPPG: true,
+    hasfNIRS: false,
+    eegSampleRate: 256,
+    motionSampleRate: 52,
+    ppgSampleRate: 64,
+    eegResolution: 12,
+    ppgResolution: 16,
+    eegVoltageRange: 2.0,
     eegCoupling: "AC",
     eegMicrovoltsPerBit: 2000 / Math.pow(2, 12),
     defaultYRange: [-200, 200],
@@ -195,6 +309,20 @@ const DEVICE_SPECS = {
     eegCoupling: "DC", // DC capable
     eegMicrovoltsPerBit: 0.298, // Factory calibrated (ADS1299 datasheet)
     defaultYRange: [-500, 500], // μV display range
+  },
+  "OpenBCI Ultra Cortex": {
+    name: "OpenBCI Ultra Cortex",
+    eegChannels: 16,
+    channelNames: Array.from({ length: 16 }, (_, i) => `Chan${i + 1}`),
+    hasMotion: true,
+    hasPPG: false,
+    hasfNIRS: false,
+    eegSampleRate: 250,
+    eegResolution: 24,
+    eegVoltageRange: 5000,
+    eegCoupling: "DC",
+    eegMicrovoltsPerBit: 0.298,
+    defaultYRange: [-500, 500],
   },
 };
 
@@ -282,6 +410,8 @@ function getDeviceInfoString(deviceModel) {
 // OSC port
 let oscPort = null;
 let swiftProcess = null;
+/** When true, bridge process exit does not auto-respawn (used while swapping Swift ↔ Athena). */
+let suppressBridgeAutoRestart = false;
 let csoundProcess = null; // Track current Csound instrument
 let currentInstrument = null;
 let currentDevice = null; // Track selected device model
@@ -301,6 +431,7 @@ let currentBandPowers = {
   absolute: { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 },
   relative: { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 },
 };
+let currentBandPowersUpdatedAt = 0;
 
 // DSP Pipeline (initialized with default settings, will be updated dynamically)
 const dsp = new DSPPipeline({
@@ -313,6 +444,10 @@ const dsp = new DSPPipeline({
   smoothingAmount: 10,
   scaling: "0-1",
   outputRate: 256,
+  notchHz: 60,
+  bandpassLo: 1,
+  bandpassHi: 45,
+  applyMedian3: false,
 });
 
 // Settings state
@@ -322,6 +457,12 @@ let settings = {
   smoothingAmount: 10, // 0 = no smoothing
   applyCAR: true, // Common Average Reference - removes global noise
   applyNotch: true,
+  /** Mains notch center frequency for server dsp.js (50 or 60 Hz). */
+  notchHz: 60,
+  bandpassLo: 1,
+  bandpassHi: 45,
+  /** 3-point running median after bandpass (impulse suppression). */
+  applyMedian3: false,
   applyBandpass: true,
   displayMode: "raw", // raw, bands, fft
   simulatorMode: false,
@@ -359,11 +500,13 @@ let settings = {
   oscScaleMode: "normalize", // "normalize" (use scaler), "raw" (no scaling), "none"
   oscAllowNegative: true, // true = send -1 to +1, false = clamp to 0 to +1
 
-  // Baseline Normalization (NeurOSC feature)
+  // Baseline normalization (rolling z-score on relative bands)
   applyBaseline: false, // Master toggle for z-score normalization
   logTransform: false, // Apply log10 before z-score
+  /** Rolling z-score window for relative bands (~10 updates/s → maxSamples = sec×10). */
+  baselineWindowSec: 60,
 
-  // Granular OSC Controls (NeurOSC feature)
+  // Granular OSC controls
   oscGranular: {
     channels: {
       CH1: true,
@@ -386,6 +529,8 @@ let settings = {
   },
 };
 
+dsp.updateConfig({ notchHz: settings.notchHz });
+
 let recordedData = [];
 let packetCount = 0;
 let bandPowerCount = 0; // For real Muse: count EEG packets to broadcast band powers @ 10 Hz
@@ -401,18 +546,11 @@ let lastWSBroadcastTime = 0;
 // ============================================================================
 
 function calculateBandPowersFromEEG() {
-  // Uses DSP's buffered sample windows to calculate band powers
-  // Based on Welch's method: segment-averaging of power spectra
+  // Uses the live raw EEG ring buffer to calculate true frequency-band power.
   // Returns {absolute, relative} matching Muse format for WebSocket broadcast
 
   try {
-    const sampleWindow = dsp.sampleWindows;
-
-    if (
-      !sampleWindow ||
-      sampleWindow.length === 0 ||
-      sampleWindow[0].length < 128
-    ) {
+    if (!eegBuffer || eegBuffer.length < 4 || eegBuffer[0].length < 128) {
       return null;
     }
 
@@ -424,24 +562,43 @@ function calculateBandPowersFromEEG() {
       gamma: { range: [30, 45], label: "γ" },
     };
 
+    const sampleRate = 256;
+    // Shorter window gives the Research monitor visibly live values while still
+    // covering delta at 256 Hz well enough for an exploratory dashboard.
+    const n = Math.min(128, ...eegBuffer.slice(0, 4).map((buf) => buf.length));
+    if (n < 128) return null;
+
     let totalPower = 0;
     const bandPowers = {};
 
     Object.keys(bands).forEach((bandName) => {
       const range = bands[bandName].range;
-      const freqCenter = (range[0] + range[1]) / 2;
-
       let power = 0;
-      sampleWindow.forEach((samples) => {
-        samples.forEach((sample) => {
-          power += Math.abs(sample);
-        });
-      });
-      power =
-        power / (sampleWindow.length * Math.max(sampleWindow[0].length, 1));
+      let bins = 0;
 
-      const freqScaler = Math.max(0.5, 2.5 - freqCenter / 15);
-      bandPowers[bandName] = power * freqScaler;
+      for (let ch = 0; ch < 4; ch++) {
+        const raw = eegBuffer[ch].slice(-n);
+        if (raw.length < n) continue;
+        const mean = raw.reduce((sum, value) => sum + value, 0) / raw.length;
+        const lo = Math.max(1, Math.ceil((range[0] * n) / sampleRate));
+        const hi = Math.min(Math.floor((range[1] * n) / sampleRate), n / 2);
+
+        for (let k = lo; k <= hi; k++) {
+          let re = 0;
+          let im = 0;
+          for (let i = 0; i < n; i++) {
+            const hann = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)));
+            const sample = (raw[i] - mean) * hann;
+            const phase = (2 * Math.PI * k * i) / n;
+            re += sample * Math.cos(phase);
+            im -= sample * Math.sin(phase);
+          }
+          power += (re * re + im * im) / n;
+          bins++;
+        }
+      }
+
+      bandPowers[bandName] = bins > 0 ? power / bins : 0;
       totalPower += bandPowers[bandName];
     });
 
@@ -452,11 +609,8 @@ function calculateBandPowersFromEEG() {
     });
 
     const absolutePowers = {};
-    const avgRelPower = 1 / Object.keys(bands).length;
     Object.keys(bandPowers).forEach((bandName) => {
-      const relPower = relativePowers[bandName];
-      const dbValue = 10 * Math.log10(Math.max(relPower, 0.001) / avgRelPower);
-      absolutePowers[bandName] = Math.max(-3, Math.min(3, dbValue));
+      absolutePowers[bandName] = 10 * Math.log10(Math.max(bandPowers[bandName], 1e-12));
     });
 
     return {
@@ -748,6 +902,9 @@ function generateSimulatorMotion(type) {
 // ============================================================================
 
 let oscInputPort = null; // Mind Monitor OSC input listener
+let lastOscInputErrorAt = 0;
+let oscInputErrorCount = 0;
+let firstMindMonitorAddressLogged = false;
 
 function initOSC() {
   // OSC OUTPUT: Send to Csound/Max/etc
@@ -785,30 +942,70 @@ function initOSCInput() {
   });
 
   oscInputPort.on("message", (msg) => {
-    handleMindMonitorOSC(msg);
+    try {
+      handleMindMonitorOSC(msg);
+    } catch (err) {
+      logOscInputError(err);
+    }
   });
 
   oscInputPort.on("error", (err) => {
-    console.error("❌ OSC INPUT Error:", err.message);
+    logOscInputError(err);
   });
 
   oscInputPort.open();
 }
 
+function logOscInputError(err) {
+  oscInputErrorCount += 1;
+  const now = Date.now();
+
+  // Mind Monitor can generate many UDP packets per second. If the phone is
+  // pointed at the wrong mode/port, avoid drowning the terminal in repeats.
+  if (now - lastOscInputErrorAt > 2000) {
+    const message = err && err.message ? err.message : String(err);
+    console.error(
+      `❌ OSC INPUT Error (${oscInputErrorCount} total): ${message}`,
+    );
+    console.error(
+      "   Check Mind Monitor: OSC enabled, host is this Mac's IP, port 5000, protocol OSC/UDP.",
+    );
+    lastOscInputErrorAt = now;
+  }
+}
+
 // Mind Monitor OSC message handler
 function handleMindMonitorOSC(msg) {
+  if (!msg || typeof msg.address !== "string") {
+    throw new Error("Malformed OSC packet: missing address");
+  }
+
   const addr = msg.address;
-  const args = msg.args.map((a) => a.value);
+  const args = Array.isArray(msg.args)
+    ? msg.args.map((a) =>
+        a && typeof a === "object" && "value" in a ? a.value : a,
+      )
+    : [];
+
+  if (!firstMindMonitorAddressLogged) {
+    console.log(`📱 FIRST MIND MONITOR OSC: ${addr}`);
+    firstMindMonitorAddressLogged = true;
+  }
+
+  broadcastMindMonitorOsc(addr, args);
 
   // Raw EEG (already in microvolts!)
   if (addr === "/muse/eeg") {
-    const [TP9, AF7, AF8, TP10] = args;
-    broadcast({
-      type: "eeg",
-      timestamp: Date.now(),
-      eeg: { TP9, AF7, AF8, TP10 },
-      source: "mind_monitor",
-    });
+    const eeg = args.slice(0, 4).map((v) => Number(v) || 0);
+    if (eeg.length === 4) {
+      packetCount++;
+      const processed = dsp.process(eeg);
+      broadcastEEGData(eeg, processed, {
+        timestamp: Date.now(),
+        deviceName: "Mind Monitor",
+        source: "mind_monitor",
+      });
+    }
 
     // Forward to OSC output if enabled
     if (settings.oscSending) {
@@ -816,17 +1013,49 @@ function handleMindMonitorOSC(msg) {
     }
   }
 
-  // Band powers (absolute)
+  // Band powers (absolute / relative)
   else if (addr.startsWith("/muse/elements/")) {
-    const band = addr.split("/").pop().replace("_absolute", "");
-    const [ch1, ch2, ch3, ch4] = args;
+    const leaf = addr.split("/").pop();
+    const match = leaf.match(/^(delta|theta|alpha|beta|gamma)_(absolute|relative)$/);
+    const band = match?.[1];
+    const kind = match?.[2];
+    if (band && kind) {
+      const channels = args.slice(0, 4).map((v) => Number(v) || 0);
+      const mean =
+        channels.reduce((sum, value) => sum + value, 0) /
+        Math.max(1, channels.length);
 
-    broadcast({
-      type: "bandpower",
-      band: band,
-      channels: { TP9: ch1, AF7: ch2, AF8: ch3, TP10: ch4 },
-      source: "mind_monitor",
-    });
+      if (kind === "absolute") {
+        currentBandPowers.absolute[band] = mean;
+        bandPowersBuffer.absolute[band].push(mean);
+        if (bandPowersBuffer.absolute[band].length > config.maxBufferSize) {
+          bandPowersBuffer.absolute[band].shift();
+        }
+
+        const lin = {};
+        let total = 0.0001;
+        Object.keys(currentBandPowers.absolute).forEach((name) => {
+          lin[name] = Math.pow(10, currentBandPowers.absolute[name] || -6);
+          total += lin[name];
+        });
+        Object.keys(currentBandPowers.relative).forEach((name) => {
+          currentBandPowers.relative[name] = lin[name] / total;
+          bandPowersBuffer.relative[name].push(currentBandPowers.relative[name]);
+          if (bandPowersBuffer.relative[name].length > config.maxBufferSize) {
+            bandPowersBuffer.relative[name].shift();
+          }
+        });
+      } else {
+        currentBandPowers.relative[band] = mean;
+        bandPowersBuffer.relative[band].push(currentBandPowers.relative[band]);
+        if (bandPowersBuffer.relative[band].length > config.maxBufferSize) {
+          bandPowersBuffer.relative[band].shift();
+        }
+      }
+
+      packetCount++;
+      broadcastBandPowers(currentBandPowers.absolute, currentBandPowers.relative);
+    }
   }
 
   // Accelerometer
@@ -841,39 +1070,132 @@ function handleMindMonitorOSC(msg) {
     broadcastMotionData("gyro", [x, y, z]);
   }
 
+  // PPG
+  else if (addr === "/muse/ppg") {
+    broadcastMotionData("ppg", args.slice(0, 3));
+  }
+
   // Battery
   else if (addr === "/muse/batt") {
     const [percent, fuel, volt, temp] = args;
-    broadcast({
-      type: "battery",
-      percent: percent,
-      voltage: volt,
-      temperature: temp,
-      source: "mind_monitor",
-    });
+    broadcastBatteryLevel(percent);
   }
 
   // Touching forehead
   else if (addr === "/muse/touching_forehead") {
-    broadcast({
-      type: "touching",
-      value: args[0] === 1,
-      source: "mind_monitor",
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(
+          JSON.stringify({
+            type: "touching",
+            value: args[0] === 1,
+            source: "mind_monitor",
+          }),
+        );
+      }
     });
   }
+}
+
+let lastMindMonitorOscBroadcastAt = 0;
+function broadcastMindMonitorOsc(address, args) {
+  const now = Date.now();
+  if (now - lastMindMonitorOscBroadcastAt < 25) return;
+  lastMindMonitorOscBroadcastAt = now;
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(
+        JSON.stringify({
+          type: "mindMonitorOsc",
+          address,
+          args,
+          timestamp: now,
+        }),
+      );
+    }
+  });
 }
 
 // ============================================================================
 // Swift Bridge Launch
 // ============================================================================
 
-function launchSwiftBridge() {
-  console.log(`🚀 Launching Swift bridge: ${config.swiftBridgePath}`);
+/**
+ * Hot-swap BLE backend without restarting Node. Muse 2 → Swift; Muse S Athena (273e) → Athena.
+ * @returns {{ changed: boolean, bridgeMode: string }}
+ */
+function switchBleBridgeMode(mode) {
+  const normalized = mode === "athena" ? "athena" : "swift";
+  if (config.bridgeMode === normalized) {
+    return { changed: false, bridgeMode: normalized };
+  }
+  const prev = config.bridgeMode;
+  config.bridgeMode = normalized;
+  if (prev === "athena" && normalized === "swift") {
+    settings.inputFormat = "auto";
+  }
 
-  swiftProcess = spawn(config.swiftBridgePath, [], {
+  connectedDevices = [];
+  currentDevice = null;
+  global._packetTypes = {};
+
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({ type: "device_list", devices: [] }));
+    }
+  });
+
+  const spawnNext = () => {
+    suppressBridgeAutoRestart = false;
+    console.log(`\n🔁 BLE bridge switched → ${normalized.toUpperCase()}\n`);
+    handleStatus({
+      type: "status",
+      message:
+        normalized === "athena"
+          ? "BLE backend: Athena (Python). Muse 2 / Muse-33xx use Swift mode instead."
+          : "BLE backend: Swift (LibMuse). Device list will refresh in a few seconds.",
+    });
+    launchSwiftBridge();
+  };
+
+  suppressBridgeAutoRestart = true;
+  const old = swiftProcess;
+  if (old && !old.killed) {
+    old.once("close", spawnNext);
+    try {
+      old.kill("SIGTERM");
+    } catch (e) {
+      spawnNext();
+    }
+  } else {
+    spawnNext();
+  }
+
+  return { changed: true, bridgeMode: normalized };
+}
+
+function launchSwiftBridge() {
+  const useAthenaBridge = config.bridgeMode === "athena";
+  const bridgeCommand = useAthenaBridge ? "python3" : config.swiftBridgePath;
+  const bridgeArgs = useAthenaBridge ? [config.athenaBridgePath] : [];
+  const bridgeLabel = useAthenaBridge ? "Athena BLE bridge" : "Swift bridge";
+  console.log(
+    `🚀 Launching ${bridgeLabel}: ${useAthenaBridge ? config.athenaBridgePath : config.swiftBridgePath}`,
+  );
+
+  swiftProcess = spawn(bridgeCommand, bridgeArgs, {
     stdio: ["pipe", "pipe", "pipe"],
     detached: false,
   });
+
+  if (useAthenaBridge) {
+    settings.inputFormat = "microvolts";
+    console.log(
+      "📊 Athena BLE bridge: Python decoder emits μV — settings.inputFormat=microvolts",
+    );
+  } else {
+    console.log("📊 Swift bridge: EEG scaling uses inputFormat=auto unless you change it in settings.");
+  }
 
   let buffer = "";
 
@@ -913,6 +1235,13 @@ function launchSwiftBridge() {
           handleFNIRSPacket(packet);
         } else if (packet.type === "battery") {
           handleBatteryPacket(packet);
+        } else if (packet.type === "error") {
+          const msg = packet.message || JSON.stringify(packet);
+          console.error(`❌ ${bridgeLabel}:`, msg);
+          handleStatus({
+            type: "status",
+            message: `⚠️ ${bridgeLabel}: ${msg}`,
+          });
         }
       } catch (e) {
         console.log("[SWIFT]", line);
@@ -921,16 +1250,18 @@ function launchSwiftBridge() {
   });
 
   swiftProcess.stderr.on("data", (data) => {
-    console.error("[SWIFT ERROR]", data.toString().trim());
+    console.error(useAthenaBridge ? "[ATHENA ERROR]" : "[SWIFT ERROR]", data.toString().trim());
   });
 
   swiftProcess.on("close", (code) => {
-    console.log(`⚠️  Swift bridge exited with code ${code}`);
-    setTimeout(() => launchSwiftBridge(), 2000);
+    console.log(`⚠️  ${bridgeLabel} exited with code ${code}`);
+    if (!suppressBridgeAutoRestart) {
+      setTimeout(() => launchSwiftBridge(), 2000);
+    }
   });
 
   swiftProcess.on("error", (err) => {
-    console.error("❌ Failed to launch Swift bridge:", err.message);
+    console.error(`❌ Failed to launch ${bridgeLabel}:`, err.message);
   });
 }
 
@@ -977,8 +1308,12 @@ function broadcastEEGData(eeg, processed, packet = {}) {
     processed: processed.processed,
     stats: processed.stats,
     fft: processed.fft,
+    // Prefer list displayName (e.g. "Muse-33C1 (Muse 2)") over bare BLE name or LibMuse packet label.
     deviceName:
-      packet.deviceName || (settings.simulatorMode ? "SIMULATOR" : "Unknown"),
+      currentDevice?.displayName ||
+      currentDevice?.name ||
+      packet.deviceName ||
+      (settings.simulatorMode ? "SIMULATOR" : "Unknown"),
     packetCount,
   };
 
@@ -1007,7 +1342,7 @@ function handleEEGPacket(packet) {
 
   let eeg = packet.eeg;
 
-  console.log(
+  verboseLog(
     `📥 handleEEGPacket called: REAL MODE, hasEEG=${!!eeg}, packetCount=${packetCount}`,
   );
 
@@ -1046,12 +1381,12 @@ function handleEEGPacket(packet) {
 
     // Log scaling details every 100 packets
     if (packetCount % 100 === 0) {
-      console.log(
+      verboseLog(
         `📊 Voltage Scaling [${getDeviceInfoString(settings.deviceModel)}]`,
       );
-      console.log(`   Input format: ${settings.inputFormat}`);
-      console.log(`   Sample before: ${originalSample.toFixed(4)}`);
-      console.log(`   Sample after:  ${scaledSample.toFixed(4)} μV`);
+      verboseLog(`   Input format: ${settings.inputFormat}`);
+      verboseLog(`   Sample before: ${originalSample.toFixed(4)}`);
+      verboseLog(`   Sample after:  ${scaledSample.toFixed(4)} μV`);
     }
   }
 
@@ -1071,9 +1406,9 @@ function handleEEGPacket(packet) {
     bandPowerCount++;
     if (bandPowerCount >= 26) {
       // At 256 Hz EEG, 26 packets = ~10 Hz band power output
-      console.log(`🔬 Computing band powers from EEG (packet ${packetCount})`);
+      verboseLog(`🔬 Computing band powers from EEG (packet ${packetCount})`);
       const bandPowers = calculateBandPowersFromEEG();
-      console.log(
+      verboseLog(
         `🔬 Result:`,
         bandPowers ? "SUCCESS" : "NULL (DSP buffer not ready)",
       );
@@ -1113,7 +1448,7 @@ function handleBandPowersPacket(packet) {
     return;
   }
 
-  console.log(
+  verboseLog(
     `📊 Muse bandPowers received: α=${packet.relative.alpha?.toFixed(3)}`,
   );
   packetCount++;
@@ -1142,6 +1477,23 @@ function handleBandPowersPacket(packet) {
   broadcastBandPowers(packet.absolute, packet.relative);
 }
 
+/** Muse 2 often advertises as `Muse-33C1`-style BLE names; LibMuse may still report Athena/S enum — prefer the name. */
+function isMuseTwoBleSerialName(name) {
+  const t = (name || "").trim();
+  if (!/^muse[-_]/i.test(t)) return false;
+  const lower = t.toLowerCase();
+  if (lower.includes("athena")) return false;
+  if (
+    lower.includes("muse 3") ||
+    /\bmuse3\b/i.test(lower) ||
+    /\bmuse[-_\s]?3\b/i.test(lower)
+  )
+    return false;
+  if (/\bmuse\s*s\b/i.test(lower) || lower.includes("muse-s") || lower.includes("muse_s")) return false;
+  if (/\bmuse\s*2\b/i.test(lower) || lower.includes("muse2") || lower.includes("muse-2")) return true;
+  return /^muse[-_][a-z0-9]{3,}$/i.test(t);
+}
+
 function handleDeviceList(packet) {
   // Detect device models and add specs
   console.log(
@@ -1156,13 +1508,49 @@ function handleDeviceList(packet) {
     );
     let modelKey = DEVICE_MODELS.MUSE_2; // default
     let modelCode = device.model;
+    const nameBlob = `${device.name || ""} ${device.model || ""}`.toLowerCase();
 
-    // If model is a number, look up the model code
-    if (typeof device.model === "number") {
+    // OpenBCI boards (string/name from bridge or serial discovery)
+    if (nameBlob.includes("ganglion")) {
+      modelKey = "OpenBCI Ganglion";
+    } else if (
+      nameBlob.includes("ultracortex") ||
+      (nameBlob.includes("ultra") && nameBlob.includes("cortex"))
+    ) {
+      modelKey = "OpenBCI Ultra Cortex";
+    } else if (nameBlob.includes("daisy") || /\bcyton\b.*\b16\b/.test(nameBlob)) {
+      modelKey = "OpenBCI Ultra Cortex";
+    } else if (nameBlob.includes("cyton")) {
+      modelKey = "OpenBCI Cyton";
+    }
+
+    const openBciModelKeys = new Set([
+      "OpenBCI Ganglion",
+      "OpenBCI Cyton",
+      "OpenBCI Ultra Cortex",
+    ]);
+
+    let serialMuse2Lock = false;
+    if (
+      !openBciModelKeys.has(modelKey) &&
+      isMuseTwoBleSerialName(device.name || "")
+    ) {
+      modelKey = DEVICE_MODELS.MUSE_2;
+      serialMuse2Lock = true;
+    }
+
+    // If model is a number, look up the LibMuse model code (do not clobber OpenBCI or serial Muse 2)
+    if (
+      !openBciModelKeys.has(modelKey) &&
+      !serialMuse2Lock &&
+      typeof device.model === "number"
+    ) {
       const modelName = MODEL_CODES[device.model];
       if (modelName) {
         if (modelName.includes("Athena")) {
           modelKey = DEVICE_MODELS.MUSE_S_ATHENA;
+        } else if (/muse\s*3/i.test(modelName)) {
+          modelKey = DEVICE_MODELS.MUSE_3;
         } else if (modelName.includes("Muse S")) {
           modelKey = DEVICE_MODELS.MUSE_S;
         } else if (modelName.includes("Muse 2")) {
@@ -1171,16 +1559,28 @@ function handleDeviceList(packet) {
         modelCode = modelName;
       }
     } else if (device.model && typeof device.model === "string") {
-      if (device.model.includes("Athena")) {
-        modelKey = DEVICE_MODELS.MUSE_S_ATHENA;
-      } else if (device.model.includes("Muse S")) {
-        modelKey = DEVICE_MODELS.MUSE_S;
-      } else if (device.model.includes("Muse 2")) {
-        modelKey = DEVICE_MODELS.MUSE_2;
+      const dm = device.model;
+      if (
+        !openBciModelKeys.has(modelKey) &&
+        !serialMuse2Lock &&
+        !nameBlob.includes("ganglion") &&
+        !nameBlob.includes("cyton") &&
+        !nameBlob.includes("cortex")
+      ) {
+        if (dm.includes("Athena")) {
+          modelKey = DEVICE_MODELS.MUSE_S_ATHENA;
+        } else if (/muse\s*3|muse3/i.test(dm)) {
+          modelKey = DEVICE_MODELS.MUSE_3;
+        } else if (dm.includes("Muse S")) {
+          modelKey = DEVICE_MODELS.MUSE_S;
+        } else if (dm.includes("Muse 2")) {
+          modelKey = DEVICE_MODELS.MUSE_2;
+        }
       }
     }
 
-    const specs = DEVICE_SPECS[modelKey];
+    const specs =
+      DEVICE_SPECS[modelKey] || DEVICE_SPECS[DEVICE_MODELS.MUSE_2];
 
     // Normalize device_type to match UI DEVS keys (lowercase with underscores)
     let deviceType = modelKey.toLowerCase().replace(/ /g, "_");
@@ -1250,13 +1650,17 @@ function handleAccelerometerPacket(packet) {
     return;
   }
 
-  if (!packet.x || !packet.y || !packet.z) {
+  const values = Array.isArray(packet.accel)
+    ? packet.accel
+    : [packet.x, packet.y, packet.z];
+  if (values.length < 3 || values.some((value) => !Number.isFinite(Number(value)))) {
     console.log("⚠️  accelerometer packet missing data:", packet);
     return;
   }
-  console.log(`📲 Accel: x=${packet.x}, y=${packet.y}, z=${packet.z}`);
+  const accel = values.slice(0, 3).map((value) => Number(value));
+  verboseLog(`📲 Accel: x=${accel[0]}, y=${accel[1]}, z=${accel[2]}`);
   packetCount++;
-  broadcastMotionData("accel", [packet.x, packet.y, packet.z]);
+  broadcastMotionData("accel", accel);
 }
 
 function handleGyroscopePacket(packet) {
@@ -1268,13 +1672,17 @@ function handleGyroscopePacket(packet) {
     return;
   }
 
-  if (!packet.x || !packet.y || !packet.z) {
+  const values = Array.isArray(packet.gyro)
+    ? packet.gyro
+    : [packet.x, packet.y, packet.z];
+  if (values.length < 3 || values.some((value) => !Number.isFinite(Number(value)))) {
     console.log("⚠️  gyroscope packet missing data:", packet);
     return;
   }
-  console.log(`📲 Gyro: x=${packet.x}, y=${packet.y}, z=${packet.z}`);
+  const gyro = values.slice(0, 3).map((value) => Number(value));
+  verboseLog(`📲 Gyro: x=${gyro[0]}, y=${gyro[1]}, z=${gyro[2]}`);
   packetCount++;
-  broadcastMotionData("gyro", [packet.x, packet.y, packet.z]);
+  broadcastMotionData("gyro", gyro);
 }
 
 // Heart rate detection state
@@ -1486,7 +1894,7 @@ function sendBandPowersOSC(absolute, relative) {
 
       // Log every Nth message to avoid spam
       if (oscBandPowerCount % 10 === 0) {
-        console.log(
+        verboseLog(
           `📡 OSC: Sent ${oscBandPowerCount} band power messages → ${config.oscHost}:${config.oscPort}`,
           `(α=${relative.alpha?.toFixed(3)} β=${relative.beta?.toFixed(3)} θ=${relative.theta?.toFixed(3)})`,
         );
@@ -1512,7 +1920,7 @@ function sendMotionOSC(address, values) {
     });
 
     if (oscMotionCount % 5 === 0) {
-      console.log(`📡 OSC: Motion message #${oscMotionCount} → ${address}`);
+      verboseLog(`📡 OSC: Motion message #${oscMotionCount} → ${address}`);
     }
   } catch (e) {
     console.error(`❌ Motion OSC error (${address}):`, e.message);
@@ -1523,7 +1931,7 @@ let lastBandPowersBroadcast = 0;
 function broadcastBandPowers(absolute, relative) {
   const now = Date.now();
 
-  // MATEO'S NEUROSC NORMALIZATION (research-grade)
+  // Server normalization: optional log + rolling z-score on relative bands
   // Apply Log₁₀ → Z-Score normalization to RELATIVE band powers
   // This modifies the data for OSC/WebSocket output while collecting rolling baseline
   const channels = ["CH1", "CH2", "CH3", "CH4"];
@@ -1554,6 +1962,7 @@ function broadcastBandPowers(absolute, relative) {
   // Update current band powers for /api/bands endpoint (used by React UI polling)
   currentBandPowers.absolute = absolute;
   currentBandPowers.relative = normalizedRelative;
+  currentBandPowersUpdatedAt = now;
 
   // CRITICAL SAFETY: Only send OSC if there's an active data source!
   // This prevents sending stale/cached data when neither simulator nor hardware is active
@@ -1579,6 +1988,7 @@ function broadcastBandPowers(absolute, relative) {
           type: "bandPowers",
           absolute,
           relative: normalizedRelative,
+          timestamp: now,
         }),
       );
     }
@@ -1720,6 +2130,10 @@ function handleWebSocketMessage(msg, ws) {
       if (deviceIndex >= 0) {
         console.log(`✓ Found device at index ${deviceIndex}`);
         const currentDeviceToSelect = connectedDevices[deviceIndex];
+        currentDevice = currentDeviceToSelect;
+        settings.deviceModel = currentDeviceToSelect.modelKey;
+        settings.yAxisRange = getDeviceYRange(settings.deviceModel);
+        dsp.updateConfig({ numChannels: currentDeviceToSelect.specs.eegChannels });
         console.log(`🔗 Connecting to ${currentDeviceToSelect.displayName}`);
 
         // Auto-set OSC prefix based on device type
@@ -1727,7 +2141,11 @@ function handleWebSocketMessage(msg, ws) {
           settings.oscPrefix = "/muse";
         } else if (currentDeviceToSelect.specs?.name?.includes("Ganglion")) {
           settings.oscPrefix = "/ganglion";
-        } else if (currentDeviceToSelect.specs?.name?.includes("Ultracortex")) {
+        } else if (
+          /ultra.*cortex|ultracortex|openbci\s*cyton/i.test(
+            currentDeviceToSelect.specs?.name || "",
+          )
+        ) {
           settings.oscPrefix = "/openbci";
         }
         console.log(`📡 OSC prefix set to: ${settings.oscPrefix}`);
@@ -1768,6 +2186,10 @@ function handleWebSocketMessage(msg, ws) {
       console.log(`🔗 CONNECT REQUEST: deviceIndex=${msg.deviceIndex}`);
       const deviceToConnect = connectedDevices[msg.deviceIndex];
       if (deviceToConnect) {
+        currentDevice = deviceToConnect;
+        settings.deviceModel = deviceToConnect.modelKey;
+        settings.yAxisRange = getDeviceYRange(settings.deviceModel);
+        dsp.updateConfig({ numChannels: deviceToConnect.specs.eegChannels });
         console.log(`   Device: ${deviceToConnect.displayName}`);
       }
       if (swiftProcess && swiftProcess.stdin) {
@@ -1843,7 +2265,7 @@ function handleWebSocketMessage(msg, ws) {
             const gyro = generateSimulatorMotion("gyro");
             const ppg = generateSimulatorMotion("ppg");
 
-            console.log(
+            verboseLog(
               `💨 Sending motion to ${wss.clients.size} clients: accel=[${accel}], gyro=[${gyro}], ppg=[${ppg}]`,
             );
             if (accel) broadcastMotionData("accel", accel);
@@ -2055,6 +2477,35 @@ app.get("/api/status", (req, res) => {
   });
 });
 
+app.get("/api/bridge", (req, res) => {
+  const athena = config.bridgeMode === "athena";
+  res.json({
+    bridgeMode: config.bridgeMode,
+    label: athena ? "Python · Muse S Athena (direct BLE)" : "Swift · LibMuse (Muse 2 / 3 / S / …)",
+    muse2Class: athena ? "Use Swift mode for Muse-33xx / Muse 2." : "Listed here.",
+    athenaClass: athena ? "Muse S Athena (273e0013) only." : "Also works when LibMuse supports your firmware.",
+  });
+});
+
+app.post("/api/bridge/mode", (req, res) => {
+  const mode = req.body?.mode;
+  if (mode !== "swift" && mode !== "athena") {
+    return res
+      .status(400)
+      .json({ error: "body.mode must be 'swift' or 'athena'" });
+  }
+  try {
+    const result = switchBleBridgeMode(mode);
+    res.json({
+      ok: true,
+      bridgeMode: config.bridgeMode,
+      ...result,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
 app.get("/api/ports", async (req, res) => {
   // Return detected serial ports (BLED dongles) + Bluetooth devices
   // Format: { ports: ["/dev/cu.usbmodem11", ...], bluetooth: [ { name, mac, device_type }, ... ] }
@@ -2220,9 +2671,10 @@ app.get("/api/bands", (req, res) => {
   // Returns current band powers for all 4 channels (TP9, AF7, AF8, TP10)
   const channels = ["TP9", "AF7", "AF8", "TP10"];
   const bands = ["delta", "theta", "alpha", "beta", "gamma"];
+  const hasLiveBandPowers = currentBandPowersUpdatedAt > 0;
 
   // If we have real Muse data, return it
-  if (currentBandPowers.absolute && currentBandPowers.relative) {
+  if (hasLiveBandPowers && currentBandPowers.absolute && currentBandPowers.relative) {
     const values = channels.map((ch) =>
       bands.map((band) => currentBandPowers.absolute[band] || 0),
     );
@@ -2230,7 +2682,10 @@ app.get("/api/bands", (req, res) => {
       channels: channels,
       bands: bands,
       values: values,
-      timestamp: Date.now(),
+      absolute: currentBandPowers.absolute,
+      relative: currentBandPowers.relative,
+      available: true,
+      timestamp: currentBandPowersUpdatedAt,
     });
   } else {
     // No real data yet - return empty structure
@@ -2239,13 +2694,16 @@ app.get("/api/bands", (req, res) => {
       channels: channels,
       bands: bands,
       values: values,
-      timestamp: Date.now(),
+      absolute: currentBandPowers.absolute,
+      relative: currentBandPowers.relative,
+      available: false,
+      timestamp: null,
     });
   }
 });
 
 app.get("/api/timeseries", (req, res) => {
-  // NeurOSC-style timeseries endpoint for Traces view
+  // Timeseries endpoint for Traces view
   // Returns raw EEG samples from buffer
   const windowSec = parseFloat(req.query.window) || 4.0;
   const maxPoints = parseInt(req.query.maxPoints) || 512;
@@ -2296,7 +2754,7 @@ app.get("/api/timeseries", (req, res) => {
 });
 
 app.get("/api/fft", (req, res) => {
-  // NeurOSC-style FFT spectrum endpoint
+  // FFT spectrum endpoint
   // Returns frequency spectrum data
   const minFreq = parseFloat(req.query.minFreq) || 0.5;
   const maxFreq = parseFloat(req.query.maxFreq) || 40.0;
@@ -2550,6 +3008,8 @@ app.post("/api/settings", (req, res) => {
     simulatorProfile,
     applyBaseline,
     logTransform,
+    baselineWindowSec,
+    notchHz,
   } = req.body;
 
   if (
@@ -2572,7 +3032,7 @@ app.post("/api/settings", (req, res) => {
 
   if (applyBaseline !== undefined) {
     settings.applyBaseline = applyBaseline;
-    baselineSystem.baselineNormalize = applyBaseline; // Use Mateo's naming
+    baselineSystem.baselineNormalize = applyBaseline;
     console.log(
       `📊 Z-Score Baseline Normalize: ${applyBaseline ? "ON" : "OFF"}`,
     );
@@ -2644,6 +3104,22 @@ app.post("/api/settings", (req, res) => {
   }
 
   updateSettings(req.body);
+
+  if (baselineWindowSec !== undefined) {
+    applyBaselineWindowSec(settings.baselineWindowSec);
+    console.log(
+      `📊 Baseline window: ${baselineSystem.windowSec}s (${baselineSystem.maxSamples} samples @ ${BASELINE_BAND_RATE_HZ} Hz)`,
+    );
+  }
+
+  if (notchHz !== undefined) {
+    const hz =
+      settings.notchHz === 50 || settings.notchHz === 60 ? settings.notchHz : 60;
+    settings.notchHz = hz;
+    dsp.updateConfig({ notchHz: hz });
+    console.log(`✓ Notch center frequency: ${hz} Hz`);
+  }
+
   broadcastSettings();
   res.json({ status: "updated", settings });
 });
@@ -2688,7 +3164,7 @@ app.get("/api/recording/download", (req, res) => {
 });
 
 // ── Calibration Endpoints ──
-// Per-channel baselines (NeurOSC feature)
+// Per-channel baselines (rolling history)
 function createEmptyBaseline() {
   const bands = ["delta", "theta", "alpha", "beta", "gamma"];
   const baseline = {};
@@ -2698,14 +3174,16 @@ function createEmptyBaseline() {
   return baseline;
 }
 
-// MATEO'S NEUROSC BASELINE SYSTEM (Stanford neuroscience research-grade)
-// Passive rolling window - NO "Start Calibration" button needed
-// Just toggle baseline_normalize ON and it auto-collects last 60 seconds (Dr. B requirement)
+// Rolling baseline system for relative-band z-scoring
+// Passive rolling window - toggle baseline_normalize ON and it auto-collects the last windowSec seconds.
+/** Assumed relative-band update cadence for maxSamples (= windowSec × this). */
+const BASELINE_BAND_RATE_HZ = 10;
+
 let baselineSystem = {
   logTransform: false, // Apply log₁₀ first (if enabled)
   baselineNormalize: false, // Apply z-score second (if enabled)
-  windowSec: 60, // 60-second rolling window (research-grade)
-  maxSamples: 600, // 60 sec × 10 Hz = 600 samples
+  windowSec: 60,
+  maxSamples: 600,
   // Rolling history per channel+band: { CH1: { delta: [], theta: [], ... }, ... }
   history: {
     CH1: { delta: [], theta: [], alpha: [], beta: [], gamma: [] },
@@ -2715,7 +3193,32 @@ let baselineSystem = {
   },
 };
 
-// Mateo's normalize function - EXACT replica from NeurOSC openbci_service.py
+baselineSystem.windowSec = settings.baselineWindowSec;
+baselineSystem.maxSamples = Math.round(
+  settings.baselineWindowSec * BASELINE_BAND_RATE_HZ,
+);
+
+function trimBaselineHistoryToCap() {
+  const max = baselineSystem.maxSamples;
+  Object.keys(baselineSystem.history).forEach((ch) => {
+    Object.keys(baselineSystem.history[ch]).forEach((band) => {
+      const h = baselineSystem.history[ch][band];
+      if (h.length > max) {
+        baselineSystem.history[ch][band] = h.slice(h.length - max);
+      }
+    });
+  });
+}
+
+function applyBaselineWindowSec(sec) {
+  const s = Math.max(10, Math.min(600, Math.round(Number(sec))));
+  settings.baselineWindowSec = s;
+  baselineSystem.windowSec = s;
+  baselineSystem.maxSamples = Math.round(s * BASELINE_BAND_RATE_HZ);
+  trimBaselineHistoryToCap();
+}
+
+// Log optional + rolling z-score (per channel/band history)
 function normalizeBandPower(channel, band, rawPower) {
   let value = rawPower;
 
@@ -2738,7 +3241,7 @@ function normalizeBandPower(channel, band, rawPower) {
     history.shift(); // Remove oldest
   }
 
-  // Need at least 10 samples before z-scoring (Mateo's safety check)
+  // Need at least 10 samples before z-scoring
   if (history.length < 10) {
     return value;
   }
@@ -2759,7 +3262,7 @@ function normalizeBandPower(channel, band, rawPower) {
 }
 
 app.post("/api/baseline/reset", (req, res) => {
-  console.log("🔃 Resetting baseline history (NeurOSC-style)");
+  console.log("🔃 Resetting baseline history");
   baselineSystem.history = {
     CH1: { delta: [], theta: [], alpha: [], beta: [], gamma: [] },
     CH2: { delta: [], theta: [], alpha: [], beta: [], gamma: [] },
@@ -2782,8 +3285,24 @@ app.get("/api/baseline/status", (req, res) => {
     baselineNormalize: baselineSystem.baselineNormalize,
     windowSec: baselineSystem.windowSec,
     maxSamples: baselineSystem.maxSamples,
+    baselineBandRateHz: BASELINE_BAND_RATE_HZ,
     sampleCounts,
     ready: sampleCounts.CH1 >= 10, // Ready when at least 10 samples
+  });
+});
+
+app.post("/api/baseline/config", (req, res) => {
+  const { windowSec } = req.body || {};
+  if (windowSec === undefined) {
+    return res.status(400).json({ error: "windowSec required (seconds, 10–600)" });
+  }
+  applyBaselineWindowSec(windowSec);
+  broadcastSettings();
+  res.json({
+    status: "ok",
+    windowSec: baselineSystem.windowSec,
+    maxSamples: baselineSystem.maxSamples,
+    baselineBandRateHz: BASELINE_BAND_RATE_HZ,
   });
 });
 
@@ -2815,7 +3334,10 @@ app.post("/api/calibration/start", (req, res) => {
 
   // Enable baseline collection
   baselineSystem.baselineNormalize = true;
+  settings.applyBaseline = true;
 
+  broadcastSettings();
+  broadcastCalibrationStatus();
   res.json({ status: "ok", duration_ms: calibrationState.duration });
 });
 
@@ -2825,6 +3347,7 @@ app.post("/api/calibration/stop", (req, res) => {
   );
   calibrationState.isCalibrating = false;
   calibrationState.isLocked = true;
+  broadcastCalibrationStatus();
   res.json({
     status: "ok",
     samplesCollected: calibrationState.samplesCollected,
@@ -2847,6 +3370,9 @@ app.post("/api/calibration/reset", (req, res) => {
   };
 
   baselineSystem.baselineNormalize = false;
+  settings.applyBaseline = false;
+  broadcastSettings();
+  broadcastCalibrationStatus();
   res.json({ status: "ok" });
 });
 
@@ -2865,6 +3391,7 @@ app.get("/api/calibration/status", (req, res) => {
       console.log(
         `✅ Calibration complete! Collected ${calibrationState.samplesCollected} samples`,
       );
+      broadcastCalibrationStatus();
     }
   }
 
@@ -2993,7 +3520,7 @@ function convertToCSV(data) {
 }
 
 // ============================================================================
-// Granular OSC Controls (NeurOSC feature)
+// Granular OSC controls
 // ============================================================================
 
 app.post("/api/osc/granular", (req, res) => {
@@ -3028,7 +3555,7 @@ app.get("/api/osc/granular", (req, res) => {
 });
 
 // ============================================================================
-// DSP Controls (NeurOSC feature)
+// DSP controls
 // ============================================================================
 
 app.post("/api/dsp/config", (req, res) => {
@@ -3037,6 +3564,10 @@ app.post("/api/dsp/config", (req, res) => {
     applyNotch,
     applyBandpass,
     smoothingAmount,
+    notchHz,
+    bandpassLo,
+    bandpassHi,
+    applyMedian3,
     oscSending,
     deviceModel,
     inputFormat,
@@ -3051,7 +3582,36 @@ app.post("/api/dsp/config", (req, res) => {
   if (applyNotch !== undefined) {
     settings.applyNotch = applyNotch;
     dsp.useNotchFilter = applyNotch;
-    console.log(`✓ Notch filter (60 Hz): ${applyNotch ? "ON" : "OFF"}`);
+    console.log(
+      `✓ Notch filter (${settings.notchHz} Hz): ${applyNotch ? "ON" : "OFF"}`,
+    );
+  }
+
+  if (notchHz !== undefined) {
+    const hz = notchHz === 50 || notchHz === 60 ? notchHz : settings.notchHz;
+    settings.notchHz = hz;
+    dsp.updateConfig({ notchHz: hz });
+    console.log(`✓ Notch center frequency: ${hz} Hz`);
+  }
+
+  if (bandpassLo !== undefined || bandpassHi !== undefined) {
+    if (bandpassLo !== undefined) settings.bandpassLo = Number(bandpassLo);
+    if (bandpassHi !== undefined) settings.bandpassHi = Number(bandpassHi);
+    dsp.updateConfig({
+      bandpassLo: settings.bandpassLo,
+      bandpassHi: settings.bandpassHi,
+    });
+    console.log(
+      `✓ Bandpass: ${settings.bandpassLo} – ${settings.bandpassHi} Hz`,
+    );
+  }
+
+  if (applyMedian3 !== undefined) {
+    settings.applyMedian3 = !!applyMedian3;
+    dsp.updateConfig({ applyMedian3: settings.applyMedian3 });
+    console.log(
+      `✓ 3-point median (post-bandpass): ${settings.applyMedian3 ? "ON" : "OFF"}`,
+    );
   }
 
   if (applyBandpass !== undefined) {
@@ -3099,6 +3659,10 @@ app.post("/api/dsp/config", (req, res) => {
       applyNotch: settings.applyNotch,
       applyBandpass: settings.applyBandpass,
       smoothingAmount: settings.smoothingAmount,
+      notchHz: settings.notchHz,
+      bandpassLo: settings.bandpassLo,
+      bandpassHi: settings.bandpassHi,
+      applyMedian3: settings.applyMedian3,
       oscSending: settings.oscSending,
       deviceModel: settings.deviceModel,
       inputFormat: settings.inputFormat,
@@ -3113,6 +3677,10 @@ app.get("/api/dsp/config", (req, res) => {
     applyNotch: settings.applyNotch,
     applyBandpass: settings.applyBandpass,
     smoothingAmount: settings.smoothingAmount,
+    notchHz: settings.notchHz,
+    bandpassLo: settings.bandpassLo,
+    bandpassHi: settings.bandpassHi,
+    applyMedian3: settings.applyMedian3,
     deviceModel: settings.deviceModel,
     inputFormat: settings.inputFormat,
     yAxisRange: settings.yAxisRange,
@@ -3488,7 +4056,11 @@ async function startGanglion() {
 }
 
 function stopGanglion() {
-  console.log("🛑 Stopping Ganglion...");
+  if (!ganglionBoard && !ganglionStreaming && !ganglionInterval) {
+    return;
+  }
+
+  console.log("🛑 Stopping OpenBCI Ganglion stream...");
 
   if (ganglionInterval) {
     clearInterval(ganglionInterval);
@@ -3508,7 +4080,7 @@ function stopGanglion() {
   }
 
   ganglionStreaming = false;
-  console.log("✅ Ganglion stopped");
+  console.log("✅ OpenBCI Ganglion stream stopped");
 }
 
 function computeBandPowersFromEEG(channelData, sampleRate) {
@@ -3589,6 +4161,9 @@ function start() {
 
   app.listen(config.webPort, () => {
     console.log(`✓ Web UI: http://localhost:${config.webPort}`);
+    console.log(
+      `✓ Research markers: POST http://localhost:${config.webPort}/api/research-event`,
+    );
     console.log(`✓ WebSocket: ws://localhost:${config.wsPort}`);
     console.log(`✓ OSC Target: ${config.oscHost}:${config.oscPort}`);
     console.log(`✓ DSP Pipeline: ACTIVE`);
