@@ -21,7 +21,22 @@ export const BAND_BOUNDS: Record<BandName, [number, number]> = {
   gamma: [30, 50],
 };
 
-export type BandEdgeProfile = "neurovis" | "mindmonitor";
+/**
+ * Stricter δ low edge (1 Hz) matching Mind Monitor’s δ floor; θ–γ stay on NeuroVis edges.
+ * Reduces very-slow drift / motion energy counted as “delta” in wearable EEG.
+ */
+export const RESEARCH_DC_BAND_BOUNDS: Record<BandName, [number, number]> = {
+  ...BAND_BOUNDS,
+  delta: [1, 4],
+};
+
+export type BandEdgeProfile = "neurovis" | "mindmonitor" | "research_dc";
+
+export function bandBoundsForProfile(profile: BandEdgeProfile): Record<BandName, [number, number]> {
+  if (profile === "mindmonitor") return { ...MIND_MONITOR_BAND_EDGES };
+  if (profile === "research_dc") return { ...RESEARCH_DC_BAND_BOUNDS };
+  return { ...BAND_BOUNDS };
+}
 
 const NUM_CHANNELS = 4;
 
@@ -53,9 +68,7 @@ class BandFilterBank {
   }
 
   private bandEdges(): Record<BandName, [number, number]> {
-    return this.edgeProfile === "mindmonitor"
-      ? MIND_MONITOR_BAND_EDGES
-      : BAND_BOUNDS;
+    return bandBoundsForProfile(this.edgeProfile);
   }
 
   private rebuild(fs: number) {

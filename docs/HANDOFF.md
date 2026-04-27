@@ -92,6 +92,16 @@ This document summarizes the React/Next.js migration and related work, and inclu
 
 ---
 
+## Documentation: research capture & concert sonification
+
+| Doc | Contents |
+|-----|----------|
+| [RESEARCH-CAPTURE-AND-SYNC.md](./RESEARCH-CAPTURE-AND-SYNC.md) | Research routes, capture modes (browser recorder, disk session, rolling export, stimulus), clocks/markers, `bandEdgePreset`, PPG/store notes, file index |
+| [RESEARCH-EEG-AND-BASELINE-PATHS.md](./RESEARCH-EEG-AND-BASELINE-PATHS.md) | Browser trace source vs server band powers, DSP, conditioning lab |
+| [CONCERT-SONIFICATION-DUAL-SOURCE.md](./CONCERT-SONIFICATION-DUAL-SOURCE.md) | Strategies for **two simultaneous brains** in the mix (spatial, timbre, register, Csound routing) — “Amy vs Dr. B” audience-legibility |
+
+---
+
 ## Caveats
 
 - On-screen **dB** is calibrated for a similar **numeric feel** to Mind Monitor; it is **not** bit-identical to Muse’s closed SDK.
@@ -104,7 +114,7 @@ This document summarizes the React/Next.js migration and related work, and inclu
 ```
 Project: NeuroVis — GitHub https://github.com/csounder/NeuroViz-EEG (local path may be /Users/richardboulanger/dB-Studio/NeuroVis). Next.js app in web/ (port 3001), API/WebSocket/OSC from server-enhanced.js (port 3000, WS 8080).
 
-Read first: web/lib/store.ts, web/lib/clientSim.ts, web/lib/simulator.ts, web/components/charts/BandTracesChart.tsx, web/lib/bandTraceDb.ts, web/lib/displays.tsx, web/components/shell/Sidebar.tsx, web/components/shell/TopBar.tsx, web/lib/researchDeviceProfile.ts, scripts/athena_ble_bridge.py (if BLE). Repo handoff: docs/HANDOFF.md (see § 2026-04-26 for Swift vs Athena, /api/bridge, Muse 2).
+Read first: web/lib/store.ts, web/lib/clientSim.ts, web/lib/simulator.ts, web/components/charts/BandTracesChart.tsx, web/lib/bandTraceDb.ts, web/lib/displays.tsx, web/components/shell/Sidebar.tsx, web/components/shell/TopBar.tsx, web/lib/researchDeviceProfile.ts, scripts/athena_ble_bridge.py (if BLE). Repo handoff: docs/HANDOFF.md; research/capture/sync: docs/RESEARCH-CAPTURE-AND-SYNC.md (see § 2026-04-26 for Swift vs Athena, /api/bridge, Muse 2).
 
 What exists: Browser simulator singleton (clientSim) feeding Zustand + optional OSC via WS osc_send; band-pass traces in rollingBandRaw from sim and from ingest EEG; Combined bands = BandTracesChart layout="overlay" (4 ch per band, dB scale); Multichannel bands = layout="stacked" (one row per band, electrode colors); Mind Monitor–style dB via bandTraceDb; dual/quad layouts; DSP pipeline; recordings; presets; OSC monitor; **dual Muse BLE backends** (Swift default, Python Athena optional) with **runtime switch** and Settings UI; research device heuristics + Vitest.
 
@@ -115,4 +125,4 @@ My next task: [describe your task here]
 
 ---
 
-*Last updated: 2026-04-26 — BLE backends, Athena bridge hardening, handoff for GitHub push.*
+*Last updated: 2026-04-26 — BLE backends, Athena bridge hardening; research/capture docs and dual-source concert note added.*

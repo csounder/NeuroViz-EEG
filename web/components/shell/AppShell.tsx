@@ -4,11 +4,25 @@ import * as React from "react";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { MindMonitorSync } from "./MindMonitorSync";
+import { bandFilters } from "@/lib/bandFilters";
+import { presetToBandEdgeProfile } from "@/lib/bandEdgePreset";
+import { useNeuroStore } from "@/lib/store";
 import { useNeuroVisSocket } from "@/lib/useWebSocket";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   // Opens the WebSocket once for the whole app tree.
   useNeuroVisSocket();
+
+  const bandEdgePreset = useNeuroStore((s) => s.bandEdgePreset);
+
+  React.useEffect(() => {
+    useNeuroStore.getState().hydrateEegTraceSourceFromStorage();
+    useNeuroStore.getState().hydrateBandEdgePresetFromStorage();
+  }, []);
+
+  React.useEffect(() => {
+    bandFilters.setEdgeProfile(presetToBandEdgeProfile(bandEdgePreset));
+  }, [bandEdgePreset]);
 
   const [mobileOpen, setMobileOpen] = React.useState(false);
 

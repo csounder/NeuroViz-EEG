@@ -12,6 +12,8 @@ const fs = require("fs");
 const path = require("path");
 require("dotenv").config();
 
+const sessionDisk = require("./server-session-disk");
+
 const {
   DSPPipeline,
   ExponentialSmoother,
@@ -116,13 +118,16 @@ function broadcastResearchEvent(payload) {
   const detail =
     payload.detail != null ? String(payload.detail).slice(0, 600) : undefined;
   const source = payload.source === "bridge" ? "bridge" : "http";
-  const msg = JSON.stringify({
+  const ap = Number(payload?.audioPositionMs);
+  const msgObj = {
     type: "research_event",
     label,
     detail,
     source,
     wallMs: Date.now(),
-  });
+  };
+  if (Number.isFinite(ap)) msgObj.audioPositionMs = ap;
+  const msg = JSON.stringify(msgObj);
   let delivered = 0;
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
@@ -527,6 +532,13 @@ let settings = {
       averages: true, // Cross-channel mean/min/max
     },
   },
+
+  /**
+   * Welch / FFT band bin edges (Hz). Matches web `bandEdgePreset`.
+   * neurovis: δ 0.5–4; research_dc: δ 1–4 (Mind Monitor δ floor), θ–γ NeuroVis;
+   * mindmonitor: full Mind Monitor manual edges.
+   */
+  bandEdgePreset: "neurovis",
 };
 
 dsp.updateConfig({ notchHz: settings.notchHz });
@@ -545,6 +557,39 @@ let lastWSBroadcastTime = 0;
 // Calculate Band Powers from EEG using Welch Method (for real Muse hardware)
 // ============================================================================
 
+const NEUROVIS_WELCH_BAND_RANGES = {
+  delta: [0.5, 4],
+  theta: [4, 8],
+  alpha: [8, 13],
+  beta: [13, 30],
+  gamma: [30, 45],
+};
+
+const MIND_MONITOR_WELCH_BAND_RANGES = {
+  delta: [1, 4],
+  theta: [4, 8],
+  alpha: [7.5, 13],
+  beta: [13, 30],
+  gamma: [30, 44],
+};
+
+const RESEARCH_DC_WELCH_BAND_RANGES = {
+  ...NEUROVIS_WELCH_BAND_RANGES,
+  delta: [1, 4],
+};
+
+function normalizeBandEdgePreset(v) {
+  if (v === "research_dc" || v === "mindmonitor" || v === "neurovis") return v;
+  return "neurovis";
+}
+
+function welchBandRangesForPreset(preset) {
+  const p = normalizeBandEdgePreset(preset);
+  if (p === "mindmonitor") return MIND_MONITOR_WELCH_BAND_RANGES;
+  if (p === "research_dc") return RESEARCH_DC_WELCH_BAND_RANGES;
+  return NEUROVIS_WELCH_BAND_RANGES;
+}
+
 function calculateBandPowersFromEEG() {
   // Uses the live raw EEG ring buffer to calculate true frequency-band power.
   // Returns {absolute, relative} matching Muse format for WebSocket broadcast
@@ -554,12 +599,13 @@ function calculateBandPowersFromEEG() {
       return null;
     }
 
+    const ranges = welchBandRangesForPreset(settings.bandEdgePreset);
     const bands = {
-      delta: { range: [0.5, 4], label: "δ" },
-      theta: { range: [4, 8], label: "θ" },
-      alpha: { range: [8, 13], label: "α" },
-      beta: { range: [13, 30], label: "β" },
-      gamma: { range: [30, 45], label: "γ" },
+      delta: { range: ranges.delta, label: "δ" },
+      theta: { range: ranges.theta, label: "θ" },
+      alpha: { range: ranges.alpha, label: "α" },
+      beta: { range: ranges.beta, label: "β" },
+      gamma: { range: ranges.gamma, label: "γ" },
     };
 
     const sampleRate = 256;
@@ -1288,6 +1334,18 @@ function broadcastEEGData(eeg, processed, packet = {}) {
     });
   }
 
+  if (sessionDisk.isActive()) {
+    try {
+      sessionDisk.appendEeg(
+        packet.timestamp || Date.now(),
+        processed.processed,
+        0,
+      );
+    } catch (e) {
+      console.error("session_disk EEG:", e.message);
+    }
+  }
+
   // Send OSC to Csound IMMEDIATELY at 256 Hz (not throttled) if enabled
   if (settings.oscStreams.rawEEG) {
     sendOSCtoCSsound(processed.processed);
@@ -1964,6 +2022,14 @@ function broadcastBandPowers(absolute, relative) {
   currentBandPowers.relative = normalizedRelative;
   currentBandPowersUpdatedAt = now;
 
+  if (sessionDisk.isActive()) {
+    try {
+      sessionDisk.appendBands(now, absolute, normalizedRelative);
+    } catch (e) {
+      console.error("session_disk bands:", e.message);
+    }
+  }
+
   // CRITICAL SAFETY: Only send OSC if there's an active data source!
   // This prevents sending stale/cached data when neither simulator nor hardware is active
   // PRIMARY TARGET: Csound (also Max/MSP, TouchDesigner, Unity)
@@ -1997,6 +2063,7 @@ function broadcastBandPowers(absolute, relative) {
 
 let lastMotionBroadcast = { accel: 0, gyro: 0, ppg: 0 };
 function broadcastMotionData(sensorType, values) {
+  sessionDisk.setLastMotion(sensorType, values);
   const now = Date.now();
 
   // Throttle per sensor type to WS rate (10 Hz = 100ms)
@@ -2380,6 +2447,9 @@ function handleWebSocketMessage(msg, ws) {
 
 function updateSettings(newSettings) {
   Object.assign(settings, newSettings);
+  if (newSettings.bandEdgePreset !== undefined) {
+    settings.bandEdgePreset = normalizeBandEdgePreset(newSettings.bandEdgePreset);
+  }
 
   // If device model changed, update Y-axis range automatically
   if (
@@ -3161,6 +3231,67 @@ app.get("/api/recording/download", (req, res) => {
   res.setHeader("Content-Type", "text/csv");
   res.setHeader("Content-Disposition", 'attachment; filename="eeg-data.csv"');
   res.send(csv);
+});
+
+/** Disk session recorder: same manifest/CSV schema as web recorder; survives browser disconnect. */
+app.post("/api/session_recording/start", (req, res) => {
+  try {
+    if (sessionDisk.isActive()) {
+      return res.status(400).json({ ok: false, error: "already_recording" });
+    }
+    const body = req.body || {};
+    const device =
+      currentDevice?.displayName ||
+      currentDevice?.name ||
+      body.device ||
+      "UNKNOWN";
+    const r = sessionDisk.startSession({
+      name: body.name || "session",
+      segmentMinutes: body.segmentMinutes,
+      device,
+      source: settings.simulatorMode ? "simulator" : "device",
+      sampleRate: settings.outputRateHz || 256,
+      channels: Array.isArray(body.channels) ? body.channels : undefined,
+      eegTraceSource: "server_dsp",
+      outRoot: process.env.NEUROVIS_SESSION_OUT || undefined,
+    });
+    console.log(`💾 Disk session recording started → ${r.dir}`);
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
+app.post("/api/session_recording/stop", async (req, res) => {
+  try {
+    const out = await sessionDisk.stopSession();
+    if (!out) {
+      return res.status(400).json({ ok: false, error: "not_recording" });
+    }
+    console.log(
+      `💾 Disk session recording stopped → ${out.dir} (eeg_samples=${out.manifest.eeg_samples} band_samples=${out.manifest.band_samples})`,
+    );
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
+app.get("/api/session_recording/status", (req, res) => {
+  res.json(sessionDisk.getStatus());
+});
+
+app.post("/api/session_recording/annotate", (req, res) => {
+  if (!sessionDisk.isActive()) {
+    return res.status(400).json({ ok: false, error: "not_recording" });
+  }
+  const body = req.body || {};
+  const label = String(body.label || "").trim();
+  if (!label) {
+    return res.status(400).json({ ok: false, error: "label_required" });
+  }
+  sessionDisk.addAnnotation(label, body.detail);
+  res.json({ ok: true });
 });
 
 // ── Calibration Endpoints ──

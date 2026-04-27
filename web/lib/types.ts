@@ -8,6 +8,9 @@ export type EegTraceSource = "server_dsp" | "device_raw" | "browser_dsp";
 
 export type BandName = "delta" | "theta" | "alpha" | "beta" | "gamma";
 
+/** Band integration edges (Welch bins + biquad trace bank). See `bandEdgePreset.ts`. */
+export type BandEdgePreset = "neurovis" | "research_dc" | "mindmonitor";
+
 export const BAND_NAMES: BandName[] = [
   "delta",
   "theta",
@@ -147,6 +150,8 @@ export interface ResearchEventBridgeMessage {
   detail?: string;
   source?: "http" | "bridge";
   wallMs?: number;
+  /** Optional alignment to stimulus audio timeline (ms). */
+  audioPositionMs?: number;
 }
 
 export type ServerMessage =
@@ -167,6 +172,8 @@ export type ServerMessage =
   | { type: string; [k: string]: unknown };
 
 export interface NeuroVisSettings {
+  /** Welch / FFT band bin edges on the Node bridge (Csound, OSC, dashboard band powers). */
+  bandEdgePreset?: BandEdgePreset;
   simulatorMode?: boolean;
   oscPrefix?: string;
   oscHost?: string;

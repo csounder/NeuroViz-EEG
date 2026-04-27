@@ -6,6 +6,7 @@ import { ScaleControl } from "@/components/ui/ScaleControl";
 import { ResearchBlockProtocol } from "@/components/research/ResearchBlockProtocol";
 import { ResearchCapturePanel } from "@/components/research/ResearchCapturePanel";
 import { ResearchCredibilityPanel } from "@/components/research/ResearchCredibilityPanel";
+import { ResearchDownstreamAnalysisCard } from "@/components/research/ResearchDownstreamAnalysisCard";
 import { ResearchOfflineErpWorkflow } from "@/components/research/ResearchOfflineErpWorkflow";
 import { ResearchConditioningLab } from "@/components/research/ResearchConditioningLab";
 import { ResearchConnectivityVigilance } from "@/components/research/ResearchConnectivityVigilance";
@@ -553,6 +554,10 @@ export default function ResearchPage() {
             </MetricPanel>
           </CardBody>
         </Card>
+      </div>
+
+      <div id="research-downstream" className="scroll-mt-28">
+        <ResearchDownstreamAnalysisCard />
       </div>
 
       <div id="research-reference" className="scroll-mt-28 space-y-6">

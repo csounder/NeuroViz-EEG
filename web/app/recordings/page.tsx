@@ -31,6 +31,7 @@ import {
 } from "@/lib/recorder";
 import { BAND_COLORS, BAND_LABELS, cn } from "@/lib/utils";
 import { BAND_NAMES, type BandName } from "@/lib/types";
+import { ServerDiskRecordingPanel } from "@/components/recordings/ServerDiskRecordingPanel";
 
 export default function RecordingsPage() {
   const [status, setStatus] = React.useState<RecorderStatus>(recorder.status());
@@ -74,6 +75,8 @@ export default function RecordingsPage() {
 
   return (
     <div className="space-y-6">
+      <ServerDiskRecordingPanel />
+
       {/* Active recording card */}
       <Card>
         <CardHeader>

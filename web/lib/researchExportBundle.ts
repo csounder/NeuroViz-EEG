@@ -106,9 +106,17 @@ export function downloadResearchRollingExport(
   }
 
   const evLines = [
-    ["wall_ms", "wall_iso", "id", "label", "source", "detail"].join(","),
+    ["wall_ms", "wall_iso", "id", "label", "source", "detail", "audio_position_ms"].join(","),
     ...ev.map((e) =>
-      [e.wallMs, iso(e.wallMs), e.id, escapeCsv(e.label), e.source, escapeCsv(e.detail ?? "")].join(","),
+      [
+        e.wallMs,
+        iso(e.wallMs),
+        e.id,
+        escapeCsv(e.label),
+        e.source,
+        escapeCsv(e.detail ?? ""),
+        typeof e.audioPositionMs === "number" ? String(Math.round(e.audioPositionMs)) : "",
+      ].join(","),
     ),
   ];
 

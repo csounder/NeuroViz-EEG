@@ -40,6 +40,9 @@ public/app.js.working-backup
 *.pid
 *.seed
 
+# Server disk session exports (NeuroVis bridge)
+data/session_recordings/
+
 # Python
 __pycache__/
 *.pyc

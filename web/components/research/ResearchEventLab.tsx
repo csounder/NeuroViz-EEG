@@ -515,6 +515,9 @@ curl -sS -X POST http://127.0.0.1:3001/api/research-event \\
                 <div key={e.id} className="truncate">
                   <span className="text-emerald-600/90">{e.source}</span> · {new Date(e.wallMs).toISOString()} ·{" "}
                   <span className="text-zinc-300">{e.label}</span>
+                  {typeof e.audioPositionMs === "number" ? (
+                    <span className="text-zinc-500"> · audio {e.audioPositionMs.toFixed(0)} ms</span>
+                  ) : null}
                 </div>
               ))
           )}

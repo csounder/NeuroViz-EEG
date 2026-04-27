@@ -1193,7 +1193,7 @@ async def calibration_status():
 async def research_event(payload: dict):
     """Log a research marker: OSC to enabled targets, optional HTTP relay to NeuroVis Node bridge.
 
-    Body: { "label": str, "detail": str optional }
+    Body: { "label": str, "detail": str optional, "audioPositionMs": number optional }
 
     Environment:
       NEUROVIS_RESEARCH_EVENT_URL — e.g. http://127.0.0.1:3000/api/research-event
@@ -1204,6 +1204,15 @@ async def research_event(payload: dict):
         return JSONResponse({"ok": False, "error": "label required"}, status_code=400)
     detail_raw = payload.get("detail")
     detail_s = str(detail_raw).strip()[:600] if detail_raw is not None else ""
+    audio_pos_raw = payload.get("audioPositionMs")
+    audio_position_ms = None
+    if audio_pos_raw is not None:
+        try:
+            ap = float(audio_pos_raw)
+            if ap == ap:  # not NaN
+                audio_position_ms = ap
+        except (TypeError, ValueError):
+            audio_position_ms = None
     wall_ms = int(time.time() * 1000)
     osc_args = [label, detail_s, float(wall_ms)] if detail_s else [label, float(wall_ms)]
 
@@ -1223,7 +1232,10 @@ async def research_event(payload: dict):
     relay_err = None
     if relay_url:
         try:
-            body = json.dumps({"label": label, "detail": detail_s or None}).encode("utf-8")
+            relay_obj = {"label": label, "detail": detail_s or None}
+            if audio_position_ms is not None:
+                relay_obj["audioPositionMs"] = audio_position_ms
+            body = json.dumps(relay_obj).encode("utf-8")
             req = urllib.request.Request(
                 relay_url,
                 data=body,

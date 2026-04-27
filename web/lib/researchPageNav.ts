@@ -4,6 +4,7 @@ export const RESEARCH_SECTION_NAV = [
   { id: "research-analysis", label: "QC & analysis" },
   { id: "research-live", label: "Live streams" },
   { id: "research-metrics", label: "Metrics" },
+  { id: "research-downstream", label: "Offline analysis" },
   { id: "research-reference", label: "Reference" },
   { id: "research-snapshot", label: "Debug JSON" },
 ] as const;

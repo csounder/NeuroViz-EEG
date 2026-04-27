@@ -4,8 +4,10 @@ import * as React from "react";
 import { SlidersHorizontal } from "lucide-react";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { BAND_EDGE_PRESET_OPTIONS } from "@/lib/bandEdgePreset";
 import { EEG_TRACE_OPTIONS } from "@/lib/eegTraceSourceInfo";
 import { useNeuroStore } from "@/lib/store";
+import type { BandEdgePreset } from "@/lib/types";
 
 type BaselineStatus = {
   logTransform: boolean;
@@ -58,10 +60,11 @@ function EegTraceSourcePanel() {
         </span>
       </div>
       <p className="mb-3 text-[11px] leading-relaxed text-zinc-500">
-        This choice only affects <strong className="text-zinc-400">waveform charts</strong> and the{" "}
-        <strong className="text-zinc-400">band-pass trace bank</strong> (Combined / Multichannel / Raw pages).
-        Server <strong className="text-zinc-400">band power</strong> numbers, REST{" "}
-        <code className="text-zinc-600">/api/bands</code>, and OSC still use the server pipeline below.
+        This choice affects <strong className="text-zinc-400">which µV samples</strong> feed waveform charts and the
+        in-browser DSP path. <strong className="text-zinc-400">Band power magnitudes</strong> (dashboard, Csound,
+        Concert, Stimulus) follow the server Welch bins — use{" "}
+        <strong className="text-zinc-400">Band integration preset</strong> below so trace edges and server δ bins stay
+        aligned.
       </p>
       <div className="space-y-2" role="radiogroup" aria-label="EEG trace source">
         {EEG_TRACE_OPTIONS.map((opt) => (
@@ -105,9 +108,55 @@ function EegTraceSourcePanel() {
   );
 }
 
+function BandEdgePresetPanel() {
+  const bandEdgePreset = useNeuroStore((s) => s.bandEdgePreset);
+  const setBandEdgePreset = useNeuroStore((s) => s.setBandEdgePreset);
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950/35 p-4">
+      <div className="mb-2">
+        <h3 className="text-sm font-medium text-zinc-200">Band integration preset (δ–γ)</h3>
+        <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+          Same edges drive the <strong className="text-zinc-400">browser biquad trace bank</strong> and the{" "}
+          <strong className="text-zinc-400">Node bridge Welch bins</strong> (WebSocket{" "}
+          <code className="text-zinc-600">bandPowers</code>, OSC, Csound, Concert, Stimulus). Stricter δ uses a{" "}
+          <strong className="text-zinc-400">1 Hz</strong> low edge on the delta band (Mind Monitor δ floor) to keep
+          very-slow drift and motion-heavy energy out of the δ bucket — common practice on consumer EEG before
+          interpreting slow power.
+        </p>
+      </div>
+      <div className="space-y-2" role="radiogroup" aria-label="Band edge preset">
+        {BAND_EDGE_PRESET_OPTIONS.map((opt) => (
+          <label
+            key={opt.id}
+            className={`flex cursor-pointer gap-3 rounded-md border p-2.5 transition-colors ${
+              bandEdgePreset === opt.id
+                ? "border-sky-600/50 bg-sky-950/20"
+                : "border-zinc-800 bg-zinc-950/40 hover:border-zinc-700"
+            }`}
+          >
+            <input
+              type="radio"
+              name="band-edge-preset"
+              className="mt-0.5 accent-sky-500"
+              checked={bandEdgePreset === opt.id}
+              onChange={() => setBandEdgePreset(opt.id as BandEdgePreset)}
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-zinc-200">{opt.label}</span>
+              <span className="mt-0.5 block text-[11px] text-zinc-500">{opt.summary}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ResearchSignalConditioning() {
   const settings = useNeuroStore((s) => s.settings);
   const eegTraceSource = useNeuroStore((s) => s.eegTraceSource);
+  const bandEdgePreset = useNeuroStore((s) => s.bandEdgePreset);
   const calibWs = useNeuroStore((s) => s.calibration);
 
   const [baseline, setBaseline] = React.useState<BaselineStatus | null>(null);
@@ -175,6 +224,9 @@ export function ResearchSignalConditioning() {
           description="Server pipeline: optional log-scaling and rolling z-score on relative band powers, plus µV conditioning (average reference, bandpass, notch, EMA, optional 3-point median) before FFT/bands. Browser trace source is separate; band powers and OSC stay on the server unless you use the in-tab simulator."
           actions={
             <div className="flex flex-wrap items-center gap-2">
+              <Badge tone="indigo" className="normal-case">
+                bands: {bandEdgePreset.replace(/_/g, " ")}
+              </Badge>
               <Badge tone="violet" className="normal-case">
                 traces: {eegTraceSource.replace(/_/g, " ")}
               </Badge>
@@ -195,6 +247,7 @@ export function ResearchSignalConditioning() {
         </CardTitle>
       </CardHeader>
       <CardBody className="space-y-6">
+        <BandEdgePresetPanel />
         <EegTraceSourcePanel />
         <div className="grid gap-6 lg:grid-cols-2">
         <div className="space-y-4">

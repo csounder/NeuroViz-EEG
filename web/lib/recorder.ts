@@ -20,6 +20,8 @@ import { BAND_NAMES } from "./types";
 import { buildChannelsTsv, buildEegJsonBidsStub } from "./researchBidsSidecars";
 import type { DspConfig } from "./dspPipeline";
 import type { BrainStateResult } from "./types";
+import type { StimulusManifestSlice } from "./stimulusSession";
+import { stimulusSession } from "./stimulusSession";
 
 export interface Annotation {
   /** Milliseconds since recording start (aligns with `eeg.t_ms` / `bands.t_ms`). */
@@ -71,6 +73,8 @@ export interface RecordingManifest {
   };
   /** Epoch ms at recording start; eeg row `wall_ms` ≈ this + t_ms. */
   recording_anchor_wall_ms?: number;
+  /** Present when capture was started with `stimulusAlign` (audio transport + optional mic). */
+  stimulus?: StimulusManifestSlice;
   /** Schema hints so downstream tools know what to expect. */
   schema: {
     eeg_csv: string[];
@@ -231,6 +235,9 @@ class SessionRecorder {
 
   private statusTimer: ReturnType<typeof setInterval> | null = null;
 
+  /** When true, `finalize()` attaches `stimulusSession.exportManifestSlice()` and binds wall clock. */
+  private captureStimulusAlign = false;
+
   // ---------------- Lifecycle ----------------
 
   start(opts?: {
@@ -246,6 +253,8 @@ class SessionRecorder {
     channelLabels?: string[];
     /** OpenBCI Cyton/Daisy: 8 or 16; default 4. */
     eegChannelCount?: number;
+    /** Merge stimulus timeline + file reference into manifest (Stimulus-aligned lab). */
+    stimulusAlign?: boolean;
   }) {
     if (this.running) return;
     const reqN = Math.min(16, Math.max(1, opts?.eegChannelCount ?? 4));
@@ -254,6 +263,11 @@ class SessionRecorder {
     this.channelNames = normalizeChannelNames(labels, reqN);
     this.resetBuffers();
     this.startedAtMs = Date.now();
+    this.captureStimulusAlign = Boolean(opts?.stimulusAlign);
+    if (this.captureStimulusAlign) {
+      stimulusSession.trimEventsForNewRecording();
+      stimulusSession.setRecordingAnchorWallMs(this.startedAtMs);
+    }
     this.running = true;
     this.name = opts?.name ?? defaultName();
     this.source = opts?.source ?? "simulator";
@@ -431,6 +445,9 @@ class SessionRecorder {
       this.eegChannelCount > 4
         ? `Session recorder captured ${this.eegChannelCount} EEG columns (OpenBCI Cyton/Daisy-class layout). NeuroVis Research plots and band-derived metrics may still emphasize the first four channels unless extended.`
         : "Standard four-column EEG export for Muse, Ganglion, or simulator. Cyton/Daisy uses eight or sixteen columns when the device name/profile indicates that hardware.";
+    const stimulusSlice =
+      this.captureStimulusAlign ? stimulusSession.exportManifestSlice() : undefined;
+
     const manifest: RecordingManifest = {
       id: randomId(),
       name: this.name,
@@ -449,6 +466,7 @@ class SessionRecorder {
       eeg_trace_source: this.eegTraceSource,
       estimated_eeg_hz: this.estimatedEegHzSession ?? this.sampleRate,
       recording_anchor_wall_ms: this.startedAtMs,
+      ...(stimulusSlice ? { stimulus: stimulusSlice } : {}),
       provenance: {
         export_schema: "neurovis-research-v1",
         neurovis_web: "0.1.0",
@@ -471,6 +489,11 @@ class SessionRecorder {
           notes: [
             "In-browser capture: annotation wall times are client clock; not stim–ADC hardware locked.",
             "Use offline epoching (MNE, EEGLAB, etc.) for publication ERP pipelines and QC.",
+            ...(stimulusSlice
+              ? [
+                  "stimulus: manifest.stimulus carries file reference, transport timeline, and optional mic wall times; align with eeg wall_ms and recording_anchor_wall_ms.",
+                ]
+              : []),
           ],
         },
       },
@@ -721,6 +744,21 @@ export function downloadRecordingFiles(
     downloadText(
       `${safe}.epochs_summary.json`,
       buildEpochsSummaryJson(rec, { preMs: pre, postMs: post }),
+      "application/json",
+    );
+  }
+  if (rec.stimulus) {
+    downloadText(
+      `${safe}.stimulus_events.json`,
+      JSON.stringify(
+        {
+          reference: rec.stimulus.reference,
+          timeline: rec.stimulus.timeline,
+          mic: rec.stimulus.mic,
+        },
+        null,
+        2,
+      ),
       "application/json",
     );
   }

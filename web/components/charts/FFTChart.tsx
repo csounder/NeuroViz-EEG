@@ -1,9 +1,11 @@
 "use client";
 
 import * as React from "react";
+import { presetToBandEdgeProfile } from "@/lib/bandEdgePreset";
+import { bandBoundsForProfile } from "@/lib/bandFilters";
 import { useNeuroStore } from "@/lib/store";
 import { BAND_COLORS, BAND_LABELS } from "@/lib/utils";
-import { BAND_NAMES, BAND_RANGES, type BandName } from "@/lib/types";
+import { BAND_NAMES, type BandName } from "@/lib/types";
 import { computePSD } from "@/lib/fft";
 
 const CHANNEL_LABELS = ["TP9", "AF7", "AF8", "TP10"];
@@ -38,7 +40,7 @@ export function FFTChart({
   /** Per-channel PSD EMA in [0,1). Higher → heavier temporal smoothing (OpenBCI “averaged” PSD feel). 0 = off. */
   psdTimeSmooth = 0,
   fftWindow = "hann" as "hann" | "hamming",
-  /** Override shaded band regions (e.g. Mind Monitor Hz edges). Default: `BAND_RANGES`. */
+  /** Override shaded band regions. Default: edges from global `bandEdgePreset` (Research → Baseline). */
   bandShadingRanges,
 }: {
   height?: number;
@@ -54,6 +56,7 @@ export function FFTChart({
   fftWindow?: "hann" | "hamming";
   bandShadingRanges?: Record<BandName, [number, number]>;
 }) {
+  const bandEdgePreset = useNeuroStore((s) => s.bandEdgePreset);
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const rafRef = React.useRef<number | null>(null);
@@ -88,7 +91,9 @@ export function FFTChart({
     const padT = 20;
     const padB = 26;
 
-    const ranges = bandShadingRanges ?? BAND_RANGES;
+    const ranges =
+      bandShadingRanges ??
+      bandBoundsForProfile(presetToBandEdgeProfile(bandEdgePreset));
 
     const recompute = () => {
       const { rollingRaw } = useNeuroStore.getState();
@@ -297,6 +302,7 @@ export function FFTChart({
     psdTimeSmooth,
     fftWindow,
     bandShadingRanges,
+    bandEdgePreset,
   ]);
 
   return (
@@ -319,6 +325,9 @@ export function FFTChart({
           {fftWindow === "hamming" ? "Hamming" : "Hann"} window
           {psdTimeSmooth > 1e-6
             ? ` · PSD smooth ${(psdTimeSmooth * 100).toFixed(0)}%`
+            : ""}
+          {!bandShadingRanges
+            ? ` · band shade ${bandEdgePreset.replace(/_/g, " ")}`
             : ""}
         </span>
       </div>
