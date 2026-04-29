@@ -52,7 +52,8 @@ export default function ConcertPage() {
   const bandEdgePreset = useNeuroStore((s) => s.bandEdgePreset);
   const simulatorMode = useNeuroStore((s) => Boolean(s.settings.simulatorMode));
   const clientSimRunning = useNeuroStore((s) => s.clientSim.running);
-  const simAudioReactive = simulatorMode || clientSimRunning;
+  const dualOn = useNeuroStore((s) => s.dualRehearsal.enabled);
+  const simAudioReactive = simulatorMode || clientSimRunning || dualOn;
 
   const [scene, setScene] = React.useState<ConcertScene>("auroraBrain");
   const [intensity, setIntensity] = React.useState(1.15);

@@ -29,6 +29,9 @@ export const BAND_RANGES: Record<BandName, [number, number]> = {
 
 export type BandPowers = Record<BandName, number>;
 
+/** Dual rehearsal driver — whose synthetic stream feeds the dashboard (simulator page). */
+export type DualRehearsalDriver = "amy" | "self" | "alternate" | "blend";
+
 export interface EEGMessage {
   type: "eeg";
   timestamp: number;

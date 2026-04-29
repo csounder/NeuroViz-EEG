@@ -14,6 +14,7 @@ import {
   Waves,
   Server,
   Globe,
+  Users,
 } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -31,7 +32,12 @@ import { useNeuroStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { clientSim } from "@/lib/clientSim";
+import {
+  startDualRehearsal,
+  stopDualRehearsal,
+} from "@/lib/dualRehearsalSim";
 import { SIM_PROFILES, type SimProfile } from "@/lib/simulator";
+import type { DualRehearsalDriver } from "@/lib/types";
 import { BAND_NAMES, type BandPowers } from "@/lib/types";
 import { BAND_COLORS, BAND_LABELS } from "@/lib/utils";
 
@@ -82,13 +88,15 @@ const PROFILES: {
 type Mode = "client" | "server";
 
 export default function SimulatorPage() {
-  const { settings, wsStatus, simState } = useNeuroStore(
+  const { settings, wsStatus, simState, dualRehearsal } = useNeuroStore(
     useShallow((s) => ({
       settings: s.settings,
       wsStatus: s.wsStatus,
       simState: s.clientSim,
+      dualRehearsal: s.dualRehearsal,
     })),
   );
+  const setDualRehearsal = useNeuroStore((s) => s.setDualRehearsal);
 
   const [mode, setMode] = React.useState<Mode>("client");
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -150,6 +158,7 @@ export default function SimulatorPage() {
 
   // Master toggles — dispatch to either client or server engine
   const start = async () => {
+    stopDualRehearsal();
     if (mode === "client") {
       // Stop any server-side sim to avoid two streams racing
       await api.useSimulator(false).catch(() => {});
@@ -174,6 +183,18 @@ export default function SimulatorPage() {
 
   const running =
     mode === "client" ? simState.running : Boolean(settings.simulatorMode);
+  const dualRunning = dualRehearsal.enabled;
+
+  const startDualRehearsalMode = () =>
+    run("dual", async () => {
+      clientSim.stop();
+      await api.useSimulator(false).catch(() => {});
+      startDualRehearsal();
+    });
+
+  const stopDualRehearsalMode = () => {
+    stopDualRehearsal();
+  };
 
   const setProfile = (p: SimProfile) => {
     setManualMode(false);
@@ -301,7 +322,9 @@ export default function SimulatorPage() {
             <Button
               variant={running ? "danger" : "primary"}
               onClick={() => run("toggle", () => (running ? stop() : start()))}
-              disabled={busy !== null || wsStatus !== "open"}
+              disabled={
+                busy !== null || wsStatus !== "open" || dualRunning
+              }
               leftIcon={
                 running ? (
                   <Power className="h-3.5 w-3.5" />
@@ -355,6 +378,137 @@ export default function SimulatorPage() {
                 enable the OSC relay.
               </span>
             </div>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* Two-person rehearsal — distinct synthetic minds on one machine */}
+      <Card>
+        <CardHeader>
+          <CardTitle
+            icon={<Users className="h-4 w-4" />}
+            description="Rehearse Amy vs you before two laptops: two profile-shaped band streams with different motion; pick who drives the dashboard or alternate / blend."
+            actions={
+              dualRunning ? (
+                <span className="rounded-full border border-violet-500/40 bg-violet-500/15 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-violet-200">
+                  Dual rehearsal on
+                </span>
+              ) : null
+            }
+          >
+            Dual rehearsal (Amy + you)
+          </CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-4">
+          <p className="text-xs leading-relaxed text-zinc-500">
+            Not full 256 Hz DSP twins — avoids fighting the shared simulator filters — but band powers, coarse µV, and traces diverge so Concert / Csound / OSC hear{" "}
+            <strong className="text-zinc-300">different characters</strong>. Stop this mode before starting the standard simulator above.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+                Amy (preset)
+              </label>
+              <select
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-violet-500/60"
+                value={dualRehearsal.amyProfile}
+                disabled={busy !== null}
+                onChange={(e) =>
+                  setDualRehearsal({
+                    amyProfile: e.target.value as SimProfile,
+                  })
+                }
+              >
+                {PROFILES.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.emoji} {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+                You (preset)
+              </label>
+              <select
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-violet-500/60"
+                value={dualRehearsal.selfProfile}
+                disabled={busy !== null}
+                onChange={(e) =>
+                  setDualRehearsal({
+                    selfProfile: e.target.value as SimProfile,
+                  })
+                }
+              >
+                {PROFILES.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.emoji} {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+              Who feeds the dashboard
+            </label>
+            <select
+              className="w-full max-w-xl rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-violet-500/60"
+              value={dualRehearsal.driver}
+              disabled={busy !== null}
+              onChange={(e) =>
+                setDualRehearsal({
+                  driver: e.target.value as DualRehearsalDriver,
+                })
+              }
+            >
+              <option value="alternate">Alternate Amy / You (every few seconds)</option>
+              <option value="amy">Amy only</option>
+              <option value="self">You only</option>
+              <option value="blend">Blend both (average bands)</option>
+            </select>
+          </div>
+
+          {dualRehearsal.driver === "alternate" && (
+            <Slider
+              label="Alternate interval"
+              value={dualRehearsal.alternatePeriodSec}
+              min={3}
+              max={20}
+              step={1}
+              onChange={(v) => setDualRehearsal({ alternatePeriodSec: v })}
+              format={(v) => `${v}s`}
+            />
+          )}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              variant={dualRunning ? "danger" : "secondary"}
+              onClick={() =>
+                dualRunning ? stopDualRehearsalMode() : startDualRehearsalMode()
+              }
+              disabled={busy !== null || running}
+              leftIcon={
+                dualRunning ? (
+                  <Power className="h-3.5 w-3.5" />
+                ) : (
+                  <Users className="h-3.5 w-3.5" />
+                )
+              }
+            >
+              {dualRunning ? "Stop dual rehearsal" : "Start dual rehearsal"}
+            </Button>
+            {dualRunning && dualRehearsal.lastDriverLabel && (
+              <span className="font-mono text-xs text-violet-300">
+                {dualRehearsal.lastDriverLabel}
+              </span>
+            )}
+          </div>
+          {running && (
+            <p className="text-xs text-amber-400">
+              Stop the standard simulator first — dual rehearsal and full EEG simulator cannot run together.
+            </p>
           )}
         </CardBody>
       </Card>

@@ -13,6 +13,7 @@
 //   - the WebSocket `wsSend` singleton (to relay outbound OSC to UDP).
 
 import { useNeuroStore, resetBandFilterStreamEstimator } from "./store";
+import { stopDualRehearsal } from "./dualRehearsalSim";
 import {
   BrowserEEGSimulator,
   DEFAULT_SIM_OPTIONS,
@@ -89,6 +90,7 @@ export const clientSim = {
   start() {
     const s = ensureSim();
     if (s.isRunning) return;
+    stopDualRehearsal();
     resetBandFilterStreamEstimator();
     packetCount = 0;
     lastRelayActive = false;

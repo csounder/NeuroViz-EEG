@@ -7,6 +7,7 @@ import type {
   BandName,
   BrainStateResult,
   DeviceInfo,
+  DualRehearsalDriver,
   EEGMessage,
   EegTraceSource,
   NeuroVisSettings,
@@ -33,6 +34,7 @@ import {
   RESEARCH_EVENTS_MAX,
   RESEARCH_TIMELINE_MAX,
 } from "./researchTypes";
+import type { SimProfile } from "./simulator";
 
 export type ConnectionStatus =
   | "idle"
@@ -103,6 +105,17 @@ interface NeuroState {
     startedAt: number | null;
   };
 
+  /** Two-person rehearsal (Amy vs you) — synthetic bands only; mutual exclusion with clientSim loop. */
+  dualRehearsal: {
+    enabled: boolean;
+    amyProfile: SimProfile;
+    selfProfile: SimProfile;
+    driver: DualRehearsalDriver;
+    /** Seconds per side when driver === "alternate". */
+    alternatePeriodSec: number;
+    lastDriverLabel: string;
+  };
+
   // Streams
   latestEEG: EEGMessage | null;
   rollingRaw: number[][]; // per-channel ring buffers for Raw EEG chart
@@ -165,6 +178,7 @@ interface NeuroState {
   setSettings: (settings: NeuroVisSettings) => void;
 
   setClientSim: (patch: Partial<NeuroState["clientSim"]>) => void;
+  setDualRehearsal: (patch: Partial<NeuroState["dualRehearsal"]>) => void;
   feedSimEEG: (raw: number[]) => void;
   feedSimBandTraces: (perBandPerChannel: Record<BandName, number[]>) => void;
   feedSimBands: (absolute: BandPowers, relative: BandPowers) => void;
@@ -387,6 +401,15 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
     startedAt: null,
   },
 
+  dualRehearsal: {
+    enabled: false,
+    amyProfile: "meditative",
+    selfProfile: "focused",
+    driver: "alternate",
+    alternatePeriodSec: 6,
+    lastDriverLabel: "",
+  },
+
   calibration: {
     isCalibrating: false,
     percent: 0,
@@ -441,6 +464,8 @@ export const useNeuroStore = create<NeuroState>((set, get) => ({
 
   setClientSim: (patch) =>
     set((st) => ({ clientSim: { ...st.clientSim, ...patch } })),
+  setDualRehearsal: (patch) =>
+    set((st) => ({ dualRehearsal: { ...st.dualRehearsal, ...patch } })),
 
   feedSimEEG: (raw) => {
     const now = Date.now();

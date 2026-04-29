@@ -122,11 +122,13 @@ This document summarizes the React/Next.js migration and related work, and inclu
 **Audio-reactive drive:**
 
 - **Csound** output is tapped **Csound → `AnalyserNode` → destination** in `CsoundV12Renderer` (`connectCsoundNode`); RMS is smoothed in `web/lib/concertAudioMeter.ts` (`getConcertAudioLevel`).
-- **Simulator preview:** When **`settings.simulatorMode`** or **`clientSim.running`** is true, `ConcertVisualizer` receives **`simAudioReactive`** and blends **`max(RMS, pseudo)`**, where **pseudo** is derived from normalized bands + channel energy + light phase wobble (`blendConcertAudioLevel` in `ConcertVisualizer.tsx`). So you can **preview AR looks without starting Csound**; real audio wins when louder.
+- **Simulator preview:** When **`settings.simulatorMode`**, **`clientSim.running`**, or **dual rehearsal** is on, `ConcertVisualizer` receives **`simAudioReactive`** and blends **`max(RMS, pseudo)`**, where **pseudo** is derived from normalized bands + channel energy + light phase wobble (`blendConcertAudioLevel` in `ConcertVisualizer.tsx`). So you can **preview AR looks without starting Csound**; real audio wins when louder.
 
 **Sharing / dual perf:** Performance preset JSON (`web/lib/performancePreset.ts`) validates **all 20** concert scene ids. Collaboration workflow and hardware mixer → **`docs/CONCERT-SONIFICATION-DUAL-SOURCE.md`**. Launch/pair/play → **`docs/QUICKSTART-LAUNCH-PAIR-PLAY.md`**.
 
-**Future (not implemented):** True dual-participant multiplexing on one server — **`docs/CONCERT-SONIFICATION-DUAL-SOURCE.md` §12**.
+**Dual rehearsal (Simulator page):** two synthetic minds (**Amy** vs **you**) with distinct simulator profiles; merged per driver (`alternate` / `blend` / solo). See `web/lib/dualRehearsalSim.ts` — not full dual DSP (shared filters); band powers + traces + coarse µV diverge for rehearsal.
+
+---
 
 | Area | Path |
 |------|------|
@@ -134,6 +136,7 @@ This document summarizes the React/Next.js migration and related work, and inclu
 | Concert page / keys | `web/app/concert/page.tsx` |
 | Performance presets | `web/lib/performancePreset.ts`, `web/components/concert/PerformancePresetShareCard.tsx` |
 | Csound audio tap | `web/components/csound/CsoundV12Renderer.tsx` (`connectCsoundNode`), `web/lib/concertAudioMeter.ts` |
+| Dual rehearsal (Amy + you) | `web/lib/dualRehearsalSim.ts`, `web/app/simulator/page.tsx` |
 
 ---
 
