@@ -1,5 +1,10 @@
 # NeuroVis + Muse Hardware - Quick Start
 
+> **Modern stack (Next.js + Muse S Athena + Mind Monitor):** use the step-by-step guide  
+> **`docs/QUICKSTART-LAUNCH-PAIR-PLAY.md`** — two terminals, ports **3001** / **3000** / **8080**, OSC **5000**.
+
+The sections below describe the **legacy single-port** flow (**http://localhost:3000** only). Prefer the doc above for current development.
+
 ## 🚀 Start the Dashboard (30 seconds)
 
 ```bash

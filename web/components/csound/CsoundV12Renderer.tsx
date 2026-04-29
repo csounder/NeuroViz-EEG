@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Slider } from "@/components/ui/Slider";
 import type { BandName, BandPowers, EEGMessage } from "@/lib/types";
+import { attachConcertAudioMeter, stopConcertAudioMeter } from "@/lib/concertAudioMeter";
 import type { CsoundObj } from "@csound/browser";
 
 const BAND_INDEX: Record<BandName, number> = {
@@ -254,6 +255,7 @@ export function CsoundV12Renderer({
     } catch (error) {
       appendLog(`Stop error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
+      stopConcertAudioMeter();
       csoundRef.current = null;
       audioContextRef.current = null;
       activeSustainedNotesRef.current.clear();
@@ -1866,10 +1868,25 @@ async function connectCsoundNode(
     ]);
     if (node && audioContext) {
       try {
-        node.connect(audioContext.destination);
-        appendLog("Csound AudioNode connected to browser destination.");
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.55;
+        try {
+          node.disconnect();
+        } catch {
+          /* not connected yet */
+        }
+        node.connect(analyser);
+        analyser.connect(audioContext.destination);
+        attachConcertAudioMeter(analyser);
+        appendLog("Csound → analyser → destination (concert audio-reactive meter on).");
       } catch {
-        appendLog("Csound AudioNode already connected or connection was rejected.");
+        try {
+          node.connect(audioContext.destination);
+          appendLog("Csound AudioNode connected to browser destination (no analyser tap).");
+        } catch {
+          appendLog("Csound AudioNode already connected or connection was rejected.");
+        }
       }
     } else {
       appendLog("Csound AudioNode not available yet after start().");

@@ -5,8 +5,11 @@ import { Eye, EyeOff, Film, Maximize2, Sparkles } from "lucide-react";
 import {
   ConcertVisualizer,
   CONCERT_SCENES,
+  CONCERT_SHIFT_SCENES,
+  concertSceneSpec,
   type ConcertScene,
 } from "@/components/concert/ConcertVisualizer";
+import { PerformancePresetShareCard } from "@/components/concert/PerformancePresetShareCard";
 import { CsoundV12Renderer, type V12RenderControls } from "@/components/csound/CsoundV12Renderer";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -46,6 +49,10 @@ export default function ConcertPage() {
   const deviceName = useNeuroStore((s) => s.deviceName);
   const motionStreams = useNeuroStore((s) => s.motion);
   const batteryPct = useNeuroStore((s) => s.batteryPct);
+  const bandEdgePreset = useNeuroStore((s) => s.bandEdgePreset);
+  const simulatorMode = useNeuroStore((s) => Boolean(s.settings.simulatorMode));
+  const clientSimRunning = useNeuroStore((s) => s.clientSim.running);
+  const simAudioReactive = simulatorMode || clientSimRunning;
 
   const [scene, setScene] = React.useState<ConcertScene>("auroraBrain");
   const [intensity, setIntensity] = React.useState(1.15);
@@ -60,10 +67,17 @@ export default function ConcertPage() {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) {
         return;
       }
-      if (event.key >= "1" && event.key <= "9") {
+      if (event.altKey && event.key >= "1" && event.key <= "9") {
+        setScene(CONCERT_SHIFT_SCENES[Number(event.key) - 1].id);
+        event.preventDefault();
+      } else if (event.altKey && event.key === "0") {
+        setScene(CONCERT_SHIFT_SCENES[9].id);
+        event.preventDefault();
+      } else if (!event.altKey && event.key >= "1" && event.key <= "9") {
         setScene(CONCERT_SCENES[Number(event.key) - 1].id);
+      } else if (!event.altKey && event.key === "0") {
+        setScene(CONCERT_SCENES[9].id);
       }
-      if (event.key === "0") setScene(CONCERT_SCENES[9].id);
       if (event.key === "f" || event.key === "F") {
         void requestStageFullscreen(stageRef.current);
       }
@@ -88,7 +102,7 @@ export default function ConcertPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const spec = CONCERT_SCENES.find((s) => s.id === scene) ?? CONCERT_SCENES[0];
+  const spec = concertSceneSpec(scene) ?? CONCERT_SCENES[0];
 
   return (
     <div className="space-y-5">
@@ -96,7 +110,7 @@ export default function ConcertPage() {
         <CardHeader>
           <CardTitle
             icon={<Film className="h-4 w-4" />}
-            description="Ten stage-first EEG visualizers for projection, performance, and large concert audiences."
+            description="Stage-first EEG visualizers plus ten Alt-number modes: Csound RMS, or a band-sync envelope when the simulator is running."
             actions={
               <div className="flex flex-wrap items-center gap-2">
                 <Badge tone={wsStatus === "open" ? "emerald" : "rose"} dot>
@@ -132,6 +146,37 @@ export default function ConcertPage() {
                 <p className="mt-2 text-xs leading-5 text-zinc-500">{item.subtitle}</p>
               </button>
             ))}
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+              Audio-reactive · <kbd className="text-cyan-300">⌥1</kbd>–<kbd className="text-cyan-300">⌥0</kbd>{" "}
+              <span className="font-normal normal-case text-zinc-600">
+                (Csound RMS; simulator uses band-sync motion)
+              </span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              {CONCERT_SHIFT_SCENES.map((item, index) => (
+                <button
+                  key={item.id}
+                  onClick={() => setScene(item.id)}
+                  className={cn(
+                    "rounded-xl border p-4 text-left transition",
+                    scene === item.id
+                      ? "border-cyan-400/80 bg-cyan-500/10 shadow-[0_0_36px_-18px_rgba(34,211,238,.85)]"
+                      : "border-zinc-800 bg-zinc-950/40 hover:border-zinc-600 hover:bg-zinc-900/70",
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-zinc-100">{item.title}</div>
+                    <kbd className="rounded border border-cyan-900/80 bg-zinc-900 px-2 py-0.5 font-mono text-[10px] text-cyan-300">
+                      ⌥{index === 9 ? 0 : index + 1}
+                    </kbd>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-zinc-500">{item.subtitle}</p>
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto]">
@@ -171,12 +216,30 @@ export default function ConcertPage() {
           </div>
 
           <div className="rounded-lg border border-zinc-800 bg-zinc-950/45 p-3 text-xs leading-5 text-zinc-400">
-            Performance keys: <kbd className="text-emerald-300">1-9, 0</kbd> scenes,{" "}
-            <kbd className="text-emerald-300">F</kbd> fullscreen,{" "}
-            <kbd className="text-emerald-300">H</kbd> HUD,{" "}
-            <kbd className="text-emerald-300">C</kbd> controls. V12 harmony shortcuts still work
-            while this page is open, and the USB MIDI panel below stays mounted for live playing.
+            Performance keys: <kbd className="text-emerald-300">1–9, 0</kbd> classic scenes;{" "}
+            <kbd className="text-cyan-300">⌥1–⌥0</kbd> (Alt) EEG + reactive layer — Csound RMS when the engine is
+            playing; <strong className="text-zinc-300">simulator on</strong> uses band/trace energy as a stand-in so
+            you can preview AR looks without audio. <kbd className="text-emerald-300">F</kbd> fullscreen,{" "}
+            <kbd className="text-emerald-300">H</kbd> HUD, <kbd className="text-emerald-300">C</kbd> controls.
           </div>
+
+          <PerformancePresetShareCard
+            capture={() => ({
+              v12: csoundControls,
+              concert: { scene, intensity, trails, showHud, showControls },
+              research: { bandEdgePreset },
+            })}
+            onApply={(p) => {
+              setCsoundControls(p.v12);
+              if (p.concert) {
+                setScene(p.concert.scene);
+                setIntensity(p.concert.intensity);
+                setTrails(p.concert.trails);
+                setShowHud(p.concert.showHud);
+                setShowControls(p.concert.showControls);
+              }
+            }}
+          />
         </CardBody>
       </Card>
 
@@ -191,6 +254,7 @@ export default function ConcertPage() {
           intensity={intensity}
           trails={trails}
           showHud={showHud}
+          simAudioReactive={simAudioReactive}
         />
         <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-white/[0.06] to-transparent" />
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-black/70 to-transparent" />

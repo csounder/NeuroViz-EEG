@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { getConcertAudioLevel } from "@/lib/concertAudioMeter";
 import type { BandName, BandPowers } from "@/lib/types";
 
 export type ConcertScene =
@@ -13,7 +14,17 @@ export type ConcertScene =
   | "rotatingBrain"
   | "connectomeGalaxy"
   | "holographicCortex"
-  | "limbicNebula";
+  | "limbicNebula"
+  | "pulseRingsAudio"
+  | "bassBloomAudio"
+  | "stereoShearWave"
+  | "spectralCathedralAR"
+  | "scanlineWavefront"
+  | "sparkLatticeAR"
+  | "harmonicOrbitsAR"
+  | "resonantMeshAR"
+  | "corticalLightningAR"
+  | "phaseLockLattice";
 
 const BAND_COLORS: Record<BandName, [number, number, number]> = {
   delta: [80, 155, 255],
@@ -82,6 +93,70 @@ export const CONCERT_SCENES: {
   },
 ];
 
+/** EEG + browser Csound RMS (⌥1 … ⌥0). Simulator uses band-sync envelope when audio is silent. */
+export const CONCERT_SHIFT_SCENES: {
+  id: ConcertScene;
+  title: string;
+  subtitle: string;
+}[] = [
+  {
+    id: "pulseRingsAudio",
+    title: "Pulse Rings (AR)",
+    subtitle: "Concentric neural halos: band hues, ring breathe from RMS + γ/β.",
+  },
+  {
+    id: "bassBloomAudio",
+    title: "Bass Bloom (AR)",
+    subtitle: "Slow δ/θ core swells with audio bursts; meditative low-end focus.",
+  },
+  {
+    id: "stereoShearWave",
+    title: "Stereo Shear (AR)",
+    subtitle: "Left/right cortical waves: channel asymmetry × live level.",
+  },
+  {
+    id: "spectralCathedralAR",
+    title: "Spectral Cathedral (AR)",
+    subtitle: "Vertical pillars spike on transients; EEG tints the nave.",
+  },
+  {
+    id: "scanlineWavefront",
+    title: "Scanline Wavefront (AR)",
+    subtitle: "Raster storm: horizontal fronts velocity-modulated by audio.",
+  },
+  {
+    id: "sparkLatticeAR",
+    title: "Spark Lattice (AR)",
+    subtitle: "Grid ignites when RMS + band energy cross thresholds.",
+  },
+  {
+    id: "harmonicOrbitsAR",
+    title: "Harmonic Orbits (AR)",
+    subtitle: "Five band-colored orbits; angular motion kicks with the mix.",
+  },
+  {
+    id: "resonantMeshAR",
+    title: "Resonant Mesh (AR)",
+    subtitle: "Chord graph in the round; edge glow follows loudness.",
+  },
+  {
+    id: "corticalLightningAR",
+    title: "Cortical Lightning (AR)",
+    subtitle: "γ-tinted spokes and branches flash on audio peaks.",
+  },
+  {
+    id: "phaseLockLattice",
+    title: "Phase Lock Lattice (AR)",
+    subtitle: "Interference lattice: phase slips with RMS, colors from bands.",
+  },
+];
+
+export function concertSceneSpec(
+  scene: ConcertScene,
+): { id: ConcertScene; title: string; subtitle: string } | undefined {
+  return CONCERT_SCENES.find((s) => s.id === scene) ?? CONCERT_SHIFT_SCENES.find((s) => s.id === scene);
+}
+
 type BandVector = Record<BandName, number>;
 
 export function ConcertVisualizer({
@@ -91,6 +166,7 @@ export function ConcertVisualizer({
   intensity = 1,
   trails = 0.86,
   showHud = true,
+  simAudioReactive = false,
 }: {
   scene: ConcertScene;
   latestBandsAbs: BandPowers | null;
@@ -98,6 +174,8 @@ export function ConcertVisualizer({
   intensity?: number;
   trails?: number;
   showHud?: boolean;
+  /** True when server simulator or browser client sim is feeding EEG — enables AR preview without Csound. */
+  simAudioReactive?: boolean;
 }) {
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const dataRef = React.useRef({
@@ -107,6 +185,7 @@ export function ConcertVisualizer({
     intensity,
     trails,
     showHud,
+    simAudioReactive,
   });
 
   React.useEffect(() => {
@@ -117,8 +196,9 @@ export function ConcertVisualizer({
       intensity,
       trails,
       showHud,
+      simAudioReactive,
     };
-  }, [intensity, latestBandsAbs, latestBandTraces, scene, showHud, trails]);
+  }, [intensity, latestBandsAbs, latestBandTraces, scene, showHud, trails, simAudioReactive]);
 
   React.useEffect(() => {
     const canvas = canvasRef.current;
@@ -146,6 +226,13 @@ export function ConcertVisualizer({
       const data = dataRef.current;
       const bands = normalizeBands(data.latestBandsAbs);
       const channels = channelEnergy(data.latestBandTraces);
+      const audio = blendConcertAudioLevel(
+        getConcertAudioLevel(),
+        bands,
+        channels,
+        now,
+        data.simAudioReactive,
+      );
 
       ctx.fillStyle = `rgba(4, 5, 12, ${Math.max(0.04, 1 - data.trails)})`;
       ctx.fillRect(0, 0, w, h);
@@ -183,9 +270,39 @@ export function ConcertVisualizer({
         case "limbicNebula":
           drawLimbicNebula(ctx, w, h, bands, channels, now, data.intensity);
           break;
+        case "pulseRingsAudio":
+          drawPulseRingsAudio(ctx, w, h, bands, channels, now, data.intensity, audio);
+          break;
+        case "bassBloomAudio":
+          drawBassBloomAudio(ctx, w, h, bands, channels, now, data.intensity, audio);
+          break;
+        case "stereoShearWave":
+          drawStereoShearWave(ctx, w, h, bands, channels, now, data.intensity, audio);
+          break;
+        case "spectralCathedralAR":
+          drawSpectralCathedralAR(ctx, w, h, bands, channels, now, data.intensity, audio);
+          break;
+        case "scanlineWavefront":
+          drawScanlineWavefront(ctx, w, h, bands, channels, now, data.intensity, audio);
+          break;
+        case "sparkLatticeAR":
+          drawSparkLatticeAR(ctx, w, h, bands, channels, now, data.intensity, audio);
+          break;
+        case "harmonicOrbitsAR":
+          drawHarmonicOrbitsAR(ctx, w, h, bands, channels, now, data.intensity, audio);
+          break;
+        case "resonantMeshAR":
+          drawResonantMeshAR(ctx, w, h, bands, channels, now, data.intensity, audio);
+          break;
+        case "corticalLightningAR":
+          drawCorticalLightningAR(ctx, w, h, bands, channels, now, data.intensity, audio);
+          break;
+        case "phaseLockLattice":
+          drawPhaseLockLattice(ctx, w, h, bands, channels, now, data.intensity, audio);
+          break;
       }
 
-      if (data.showHud) drawHud(ctx, w, h, data.scene, bands);
+      if (data.showHud) drawHud(ctx, w, h, data.scene, bands, audio);
       raf = requestAnimationFrame(render);
     };
 
@@ -197,6 +314,23 @@ export function ConcertVisualizer({
   }, []);
 
   return <canvas ref={canvasRef} className="h-full min-h-[620px] w-full rounded-2xl bg-black" />;
+}
+
+/** When the simulator is on but Csound is silent, drive AR from band + channel energy. */
+function blendConcertAudioLevel(
+  rms: number,
+  bands: BandVector,
+  channels: number[],
+  t: number,
+  useSimFallback: boolean,
+): number {
+  if (!useSimFallback) return rms;
+  const meanBand =
+    (bands.delta + bands.theta + bands.alpha + bands.beta + bands.gamma) / 5;
+  const ch = (channels[0] + channels[1] + channels[2] + channels[3]) / 4;
+  const wobble = Math.sin(t * 5.5 + meanBand * 8) * 0.07;
+  const pseudo = clamp(0.14 + meanBand * 0.52 + ch * 0.3 + wobble, 0, 1);
+  return Math.max(rms, pseudo);
 }
 
 function normalizeBands(abs: BandPowers | null): BandVector {
@@ -778,30 +912,448 @@ function drawLimbicNebula(
   ctx.restore();
 }
 
+function drawPulseRingsAudio(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bands: BandVector,
+  channels: number[],
+  t: number,
+  intensity: number,
+  audio: number,
+) {
+  const cx = w / 2;
+  const cy = h / 2;
+  const mx = Math.min(w, h) * 0.48;
+  const rings = 14;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (let r = 1; r <= rings; r += 1) {
+    const z = r / rings;
+    const band = BAND_ORDER[r % BAND_ORDER.length];
+    const pulse = z * (0.65 + audio * 1.15 + bands.gamma * 0.35);
+    const radius = mx * pulse * (0.35 + bands[band] * 0.5) + r * 6 * (0.4 + audio);
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = rgba(BAND_COLORS[band], 0.08 + bands[band] * 0.35 + audio * 0.25);
+    ctx.lineWidth = 1.2 + (1 - z) * 5 * intensity + audio * 4;
+    ctx.stroke();
+  }
+  for (let i = 0; i < 48; i += 1) {
+    const a = (i / 48) * Math.PI * 2 + t * (0.2 + audio * 1.2);
+    const band = BAND_ORDER[i % BAND_ORDER.length];
+    const rr = mx * (0.2 + bands[band] * 0.55 + audio * 0.45);
+    dot(
+      ctx,
+      cx + Math.cos(a) * rr,
+      cy + Math.sin(a * 1.1) * rr * 0.82,
+      2 + bands[band] * 5 + channels[i % 4] * 4 + audio * 8,
+      rgba(BAND_COLORS[band], 0.35 + audio * 0.45),
+    );
+  }
+  ctx.restore();
+}
+
+function drawBassBloomAudio(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bands: BandVector,
+  channels: number[],
+  t: number,
+  intensity: number,
+  audio: number,
+) {
+  const cx = w / 2;
+  const cy = h * 0.52;
+  const low = (bands.delta + bands.theta) * 0.5;
+  const r =
+    Math.min(w, h) *
+    (0.22 + low * 0.38 + audio * 0.42) *
+    intensity;
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 2.2);
+  g.addColorStop(0, rgba(BAND_COLORS.delta, 0.35 + audio * 0.4));
+  g.addColorStop(0.35, rgba(BAND_COLORS.theta, 0.12 + low * 0.35));
+  g.addColorStop(0.7, rgba(BAND_COLORS.alpha, 0.06 + bands.alpha * 0.2));
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (let i = 0; i < 64; i += 1) {
+    const a = (i / 64) * Math.PI * 2 + t * 0.11;
+    const band = BAND_ORDER[i % BAND_ORDER.length];
+    const rad = r * (0.4 + bands[band] * 0.9 + audio * 0.6);
+    dot(
+      ctx,
+      cx + Math.cos(a) * rad,
+      cy + Math.sin(a * 1.05) * rad * 0.75,
+      1.5 + audio * 12 + channels[i % 4] * 5,
+      rgba(BAND_COLORS[band], 0.2 + bands[band] * 0.5),
+    );
+  }
+  ctx.restore();
+}
+
+function drawStereoShearWave(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bands: BandVector,
+  channels: number[],
+  t: number,
+  intensity: number,
+  audio: number,
+) {
+  const mid = w / 2;
+  const lEnergy = (channels[0] + channels[1]) * 0.5;
+  const rEnergy = (channels[2] + channels[3]) * 0.5;
+  ctx.save();
+  for (let side = 0; side < 2; side += 1) {
+    const leftSide = side === 0;
+    const chMix = leftSide ? lEnergy : rEnergy;
+    const x0 = leftSide ? 0 : mid;
+    const ww = leftSide ? mid : w - mid;
+    for (let layer = 0; layer < 9; layer += 1) {
+      const band = BAND_ORDER[(layer + side * 2) % BAND_ORDER.length];
+      ctx.beginPath();
+      for (let x = 0; x <= ww; x += 6) {
+        const gx = x0 + x;
+        const shear =
+          Math.sin(x * 0.014 + t * (0.35 + bands.beta * 0.8) + layer) *
+            (18 + chMix * 80 + audio * 95) *
+            intensity +
+          Math.sin(t * (1.2 + audio * 3) + gx * 0.01) * audio * 40;
+        const yy = h * (0.12 + layer * 0.095) + shear;
+        if (x === 0) ctx.moveTo(gx, yy);
+        else ctx.lineTo(gx, yy);
+      }
+      ctx.strokeStyle = rgba(BAND_COLORS[band], 0.14 + bands[band] * 0.42 + audio * 0.2);
+      ctx.lineWidth = 1.2 + bands[band] * 3 + audio * 3;
+      ctx.stroke();
+    }
+  }
+  ctx.strokeStyle = `rgba(255,255,255,${0.08 + audio * 0.15})`;
+  ctx.beginPath();
+  ctx.moveTo(mid, 0);
+  ctx.lineTo(mid, h);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawSpectralCathedralAR(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bands: BandVector,
+  channels: number[],
+  t: number,
+  intensity: number,
+  audio: number,
+) {
+  const floor = h * 0.9;
+  const columns = 16;
+  for (let i = 0; i < columns; i += 1) {
+    const p = i / (columns - 1);
+    const side = p < 0.5 ? -1 : 1;
+    const depth = Math.abs(p - 0.5) * 2;
+    const x = w * 0.5 + side * Math.pow(depth, 1.65) * w * 0.46;
+    const top = h * (0.1 + depth * 0.16);
+    const width = 6 + (1 - depth) * 16;
+    const band = BAND_ORDER[i % BAND_ORDER.length];
+    const spike = audio * (90 + bands.gamma * 60) * intensity;
+    const grad = ctx.createLinearGradient(x, top - spike, x, floor);
+    grad.addColorStop(0, rgba(BAND_COLORS[band], 0.2 + audio * 0.55));
+    grad.addColorStop(0.5, rgba(BAND_COLORS[band], 0.12 + bands[band] * 0.35));
+    grad.addColorStop(1, rgba(BAND_COLORS[band], 0.02));
+    ctx.fillStyle = grad;
+    ctx.shadowBlur = 22 + audio * 55 + bands[band] * 30;
+    ctx.shadowColor = rgba(BAND_COLORS[band], 0.8);
+    roundRect(ctx, x - width / 2, top - spike, width, floor - top + spike, width / 2);
+    ctx.fill();
+  }
+  const beam = ctx.createRadialGradient(w / 2, h * 0.28, 0, w / 2, h * 0.5, h * 0.65);
+  beam.addColorStop(0, `rgba(255,255,255,${0.06 + audio * 0.22})`);
+  beam.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = beam;
+  ctx.fillRect(0, 0, w, h);
+}
+
+function drawScanlineWavefront(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bands: BandVector,
+  channels: number[],
+  t: number,
+  intensity: number,
+  audio: number,
+) {
+  const lines = Math.floor(h / 5);
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (let i = 0; i < lines; i += 1) {
+    const yBase = (i / lines) * h;
+    const band = BAND_ORDER[i % BAND_ORDER.length];
+    ctx.beginPath();
+    for (let x = 0; x <= w; x += 4) {
+      const v =
+        Math.sin(x * 0.008 + t * (0.5 + audio * 4 + bands.beta) + i * 0.4) *
+          (6 + bands[band] * 28 + audio * 55) *
+          intensity +
+        channels[i % 4] * 20 * audio;
+      if (x === 0) ctx.moveTo(x, yBase + v);
+      else ctx.lineTo(x, yBase + v);
+    }
+    ctx.strokeStyle = rgba(BAND_COLORS[band], 0.1 + bands[band] * 0.35 + audio * 0.35);
+    ctx.lineWidth = 0.8 + audio * 3;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawSparkLatticeAR(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bands: BandVector,
+  channels: number[],
+  t: number,
+  intensity: number,
+  audio: number,
+) {
+  const cols = 18;
+  const rows = 12;
+  const cellW = w / cols;
+  const cellH = h / rows;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      const band = BAND_ORDER[(row + col) % BAND_ORDER.length];
+      const cx = col * cellW + cellW / 2;
+      const cy = row * cellH + cellH / 2;
+      const gate = bands[band] * 0.45 + channels[(row + col) % 4] * 0.35 + audio * 0.5;
+      if (gate < 0.25 && audio < 0.08) continue;
+      const sz = (1.5 + gate * 10 + audio * 14) * intensity;
+      dot(ctx, cx, cy, sz, rgba(BAND_COLORS[band], 0.25 + gate * 0.65));
+    }
+  }
+  ctx.restore();
+}
+
+function drawHarmonicOrbitsAR(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bands: BandVector,
+  channels: number[],
+  t: number,
+  intensity: number,
+  audio: number,
+) {
+  const cx = w / 2;
+  const cy = h / 2;
+  const base = Math.min(w, h) * 0.12;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (let i = 0; i < 5; i += 1) {
+    const band = BAND_ORDER[i];
+    const orbit = base + i * Math.min(w, h) * 0.09;
+    const speed = 0.22 + bands[band] * 0.5 + audio * 1.8;
+    const steps = 120;
+    ctx.beginPath();
+    for (let s = 0; s <= steps; s += 1) {
+      const u = s / steps;
+      const a = u * Math.PI * 2 + t * speed * (1 + i * 0.08) + channels[i] * 2;
+      const wob = 1 + Math.sin(u * Math.PI * 8 + t + audio * 10) * 0.06 * intensity;
+      const x = cx + Math.cos(a) * orbit * wob * 1.35;
+      const y = cy + Math.sin(a * 1.07) * orbit * 0.72 * wob;
+      if (s === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = rgba(BAND_COLORS[band], 0.2 + bands[band] * 0.45 + audio * 0.3);
+    ctx.lineWidth = 1.5 + bands[band] * 4 + audio * 4;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawResonantMeshAR(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bands: BandVector,
+  channels: number[],
+  t: number,
+  intensity: number,
+  audio: number,
+) {
+  const cx = w / 2;
+  const cy = h / 2;
+  const n = 22;
+  const pts: { x: number; y: number; b: number }[] = [];
+  for (let i = 0; i < n; i += 1) {
+    const a = (i / n) * Math.PI * 2 + t * 0.06;
+    const r = Math.min(w, h) * (0.28 + (i % 4) * 0.04 + bands[BAND_ORDER[i % 5]] * 0.12);
+    pts.push({
+      x: cx + Math.cos(a) * r * 1.2,
+      y: cy + Math.sin(a * 1.1) * r * 0.75,
+      b: i % BAND_ORDER.length,
+    });
+  }
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (let i = 0; i < n; i += 1) {
+    for (let j = i + 2; j < n; j += 3) {
+      const a = pts[i];
+      const b = pts[j];
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < Math.min(w, h) * 0.42) {
+        const band = BAND_ORDER[(a.b + b.b) % BAND_ORDER.length];
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        const lw = (0.4 + (bands[band] + audio) * 3.5) * intensity * (1 - d / (Math.min(w, h) * 0.42));
+        ctx.strokeStyle = rgba(BAND_COLORS[band], (1 - d / (Math.min(w, h) * 0.42)) * (0.15 + audio * 0.55));
+        ctx.lineWidth = lw;
+        ctx.stroke();
+      }
+    }
+  }
+  for (const p of pts) {
+    const band = BAND_ORDER[p.b];
+    dot(ctx, p.x, p.y, 3 + bands[band] * 6 + audio * 8, rgba(BAND_COLORS[band], 0.5));
+  }
+  ctx.restore();
+}
+
+function drawCorticalLightningAR(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bands: BandVector,
+  channels: number[],
+  t: number,
+  intensity: number,
+  audio: number,
+) {
+  const cx = w / 2;
+  const cy = h / 2;
+  const spokes = 16;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (let s = 0; s < spokes; s += 1) {
+    const a0 = (s / spokes) * Math.PI * 2 + t * 0.04;
+    const band = BAND_ORDER[s % BAND_ORDER.length];
+    const reach =
+      Math.min(w, h) *
+      (0.18 + bands.gamma * 0.35 + audio * 0.55 + channels[s % 4] * 0.2) *
+      intensity;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    let px = cx;
+    let py = cy;
+    const segs = 5 + Math.floor(audio * 8);
+    for (let k = 1; k <= segs; k += 1) {
+      const fk = k / segs;
+      const jitter = (Math.sin(t * 8 + s + k * 3) * 18 + Math.cos(t * 11 + k)) * audio * intensity;
+      px = cx + Math.cos(a0 + fk * 0.4) * reach * fk + jitter;
+      py = cy + Math.sin(a0 + fk * 0.35) * reach * fk * 0.82 + jitter * 0.7;
+      ctx.lineTo(px, py);
+    }
+    ctx.strokeStyle = rgba(BAND_COLORS[band], 0.15 + bands[band] * 0.4 + audio * 0.45);
+    ctx.lineWidth = 1.2 + audio * 5;
+    ctx.shadowBlur = 12 + audio * 40;
+    ctx.shadowColor = rgba(BAND_COLORS.gamma, 0.9);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawPhaseLockLattice(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bands: BandVector,
+  channels: number[],
+  t: number,
+  intensity: number,
+  audio: number,
+) {
+  const phase = t * (0.35 + audio * 2.2);
+  const cx = w / 2;
+  const cy = h / 2;
+  const scale = Math.min(w, h) * 0.018;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (let grid = 0; grid < 2; grid += 1) {
+    const off = grid * 0.7 + phase * (grid ? 1 : -1);
+    for (let line = -14; line <= 14; line += 1) {
+      const band = BAND_ORDER[(line + grid * 3 + 20) % BAND_ORDER.length];
+      ctx.beginPath();
+      for (let u = -80; u <= 80; u += 1) {
+        const x3 = u * 0.06;
+        const y3 = line * 0.14 + Math.sin(u * 0.12 + off + bands[band] * 3) * 0.35;
+        const z = Math.cos(u * 0.09 + phase + audio * 5) * 0.5;
+        const p = project3d(x3, y3, z, 0.55, t * 0.08 + grid * 0.4, scale * 14, cx, cy);
+        if (u === -80) ctx.moveTo(p.x2, p.y2);
+        else ctx.lineTo(p.x2, p.y2);
+      }
+      ctx.strokeStyle = rgba(BAND_COLORS[band], 0.08 + bands[band] * 0.38 + audio * 0.25);
+      ctx.lineWidth = 0.9 + bands[band] * 2.5 + audio * 3;
+      ctx.stroke();
+    }
+  }
+  for (let i = 0; i < 40; i += 1) {
+    const band = BAND_ORDER[i % BAND_ORDER.length];
+    const x = cx + Math.sin(t * 0.3 + i + audio * 6) * w * 0.35;
+    const y = cy + Math.cos(t * 0.27 + i * 0.9) * h * 0.28;
+    dot(ctx, x, y, 2 + bands[band] * 5 + channels[i % 4] * 4, rgba(BAND_COLORS[band], 0.3 + audio * 0.35));
+  }
+  ctx.restore();
+}
+
 function drawHud(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
   scene: ConcertScene,
   bands: BandVector,
+  audio: number,
 ) {
-  const spec = CONCERT_SCENES.find((s) => s.id === scene);
+  const spec = concertSceneSpec(scene);
+  const isAr = CONCERT_SHIFT_SCENES.some((s) => s.id === scene);
   ctx.save();
   ctx.fillStyle = "rgba(0,0,0,.32)";
-  roundRect(ctx, 24, 24, Math.min(430, w - 48), 108, 18);
+  const hudH = isAr ? 124 : 108;
+  roundRect(ctx, 24, 24, Math.min(480, w - 48), hudH, 18);
   ctx.fill();
   ctx.fillStyle = "rgba(244,244,245,.92)";
   ctx.font = "600 22px Inter, system-ui, sans-serif";
   ctx.fillText(spec?.title ?? "Concert Visualizer", 46, 62);
+  if (isAr) {
+    ctx.font = "11px JetBrains Mono, monospace";
+    ctx.fillStyle = "rgba(167,243,208,.88)";
+    ctx.fillText(
+      `Drive ${Math.round(audio * 100)}% · Csound RMS or simulator band-sync`,
+      46,
+      82,
+    );
+  }
   ctx.font = "12px JetBrains Mono, monospace";
   let x = 46;
+  const bandY = isAr ? 106 : 98;
   for (const band of BAND_ORDER) {
     ctx.fillStyle = rgba(BAND_COLORS[band], 0.9);
-    ctx.fillText(`${band.slice(0, 2).toUpperCase()} ${Math.round(bands[band] * 100)}`, x, 98);
+    ctx.fillText(`${band.slice(0, 2).toUpperCase()} ${Math.round(bands[band] * 100)}`, x, bandY);
     x += 72;
   }
   ctx.fillStyle = "rgba(161,161,170,.75)";
-  ctx.fillText("Press F for fullscreen. Hide HUD in controls.", 46, h - 28);
+  ctx.fillText("F fullscreen · H HUD · C controls · 1–9,0 scenes · ⌥1–⌥0 audio-reactive", 46, h - 28);
   ctx.restore();
 }
 

@@ -96,9 +96,10 @@ This document summarizes the React/Next.js migration and related work, and inclu
 
 | Doc | Contents |
 |-----|----------|
+| [QUICKSTART-LAUNCH-PAIR-PLAY.md](./QUICKSTART-LAUNCH-PAIR-PLAY.md) | **Launch → pair → play:** two terminals (`server-enhanced.js` + `web` dev), **Muse S Athena** direct BLE, **Mind Monitor** OSC to port **5000**, ports checklist, copy-paste checklist for a second laptop |
 | [RESEARCH-CAPTURE-AND-SYNC.md](./RESEARCH-CAPTURE-AND-SYNC.md) | Research routes, capture modes (browser recorder, disk session, rolling export, stimulus), clocks/markers, `bandEdgePreset`, PPG/store notes, file index |
 | [RESEARCH-EEG-AND-BASELINE-PATHS.md](./RESEARCH-EEG-AND-BASELINE-PATHS.md) | Browser trace source vs server band powers, DSP, conditioning lab |
-| [CONCERT-SONIFICATION-DUAL-SOURCE.md](./CONCERT-SONIFICATION-DUAL-SOURCE.md) | Strategies for **two simultaneous brains** in the mix (spatial, timbre, register, Csound routing) — “Amy vs Dr. B” audience-legibility |
+| [CONCERT-SONIFICATION-DUAL-SOURCE.md](./CONCERT-SONIFICATION-DUAL-SOURCE.md) | Perceptual strategies for two brains in the mix; **§10** shared **performance presets** (two MacBooks); **§11** **projection + hardware mixer** workflow; **§12** **dual-player software design** (future: server/store multiplexing, OSC namespaces) |
 
 ---
 
@@ -109,14 +110,49 @@ This document summarizes the React/Next.js migration and related work, and inclu
 
 ---
 
+## Session checkpoint — Concert shortcuts, AR audio, simulator (resume context)
+
+**Shortcuts (Concert page):**
+
+- **1–9, 0** — ten classic concert visuals (`CONCERT_SCENES`).
+- **⌥1–⌥0** (Alt / Option + digit) — ten **EEG + reactive** modes (`CONCERT_SHIFT_SCENES`). **`preventDefault`** is used so the browser is less likely to steal the combo. **Shift+digits was replaced** with Alt specifically to avoid clashing with typing/shift-layer shortcuts.
+
+**Why not F-keys for browser concerts:** Function keys are risky in the tab — especially **F5 (reload)** and **F11/F12** (fullscreen/devtools). Prefer **Alt+digits** or keep mouse picks from the grid; Electron/kiosk builds could revisit F-keys with full shortcut ownership.
+
+**Audio-reactive drive:**
+
+- **Csound** output is tapped **Csound → `AnalyserNode` → destination** in `CsoundV12Renderer` (`connectCsoundNode`); RMS is smoothed in `web/lib/concertAudioMeter.ts` (`getConcertAudioLevel`).
+- **Simulator preview:** When **`settings.simulatorMode`** or **`clientSim.running`** is true, `ConcertVisualizer` receives **`simAudioReactive`** and blends **`max(RMS, pseudo)`**, where **pseudo** is derived from normalized bands + channel energy + light phase wobble (`blendConcertAudioLevel` in `ConcertVisualizer.tsx`). So you can **preview AR looks without starting Csound**; real audio wins when louder.
+
+**Sharing / dual perf:** Performance preset JSON (`web/lib/performancePreset.ts`) validates **all 20** concert scene ids. Collaboration workflow and hardware mixer → **`docs/CONCERT-SONIFICATION-DUAL-SOURCE.md`**. Launch/pair/play → **`docs/QUICKSTART-LAUNCH-PAIR-PLAY.md`**.
+
+**Future (not implemented):** True dual-participant multiplexing on one server — **`docs/CONCERT-SONIFICATION-DUAL-SOURCE.md` §12**.
+
+| Area | Path |
+|------|------|
+| Concert canvas + scenes | `web/components/concert/ConcertVisualizer.tsx` |
+| Concert page / keys | `web/app/concert/page.tsx` |
+| Performance presets | `web/lib/performancePreset.ts`, `web/components/concert/PerformancePresetShareCard.tsx` |
+| Csound audio tap | `web/components/csound/CsoundV12Renderer.tsx` (`connectCsoundNode`), `web/lib/concertAudioMeter.ts` |
+
+---
+
 ## Continuation prompt (paste into a new Cursor chat)
 
 ```
-Project: NeuroVis — GitHub https://github.com/csounder/NeuroViz-EEG (local path may be /Users/richardboulanger/dB-Studio/NeuroVis). Next.js app in web/ (port 3001), API/WebSocket/OSC from server-enhanced.js (port 3000, WS 8080).
+Project: NeuroVis — GitHub https://github.com/csounder/NeuroViz-EEG (local path may be /Users/richardboulanger/dB-Studio/NeuroVis). Next.js app in web/ (port 3001), API/WebSocket/OSC from server-enhanced.js (port 3000, WS 8080, Mind Monitor OSC in on UDP 5000).
 
-Read first: web/lib/store.ts, web/lib/clientSim.ts, web/lib/simulator.ts, web/components/charts/BandTracesChart.tsx, web/lib/bandTraceDb.ts, web/lib/displays.tsx, web/components/shell/Sidebar.tsx, web/components/shell/TopBar.tsx, web/lib/researchDeviceProfile.ts, scripts/athena_ble_bridge.py (if BLE). Repo handoff: docs/HANDOFF.md; research/capture/sync: docs/RESEARCH-CAPTURE-AND-SYNC.md (see § 2026-04-26 for Swift vs Athena, /api/bridge, Muse 2).
+Before coding, read docs/HANDOFF.md (especially “Session checkpoint — Concert shortcuts…”).
 
-What exists: Browser simulator singleton (clientSim) feeding Zustand + optional OSC via WS osc_send; band-pass traces in rollingBandRaw from sim and from ingest EEG; Combined bands = BandTracesChart layout="overlay" (4 ch per band, dB scale); Multichannel bands = layout="stacked" (one row per band, electrode colors); Mind Monitor–style dB via bandTraceDb; dual/quad layouts; DSP pipeline; recordings; presets; OSC monitor; **dual Muse BLE backends** (Swift default, Python Athena optional) with **runtime switch** and Settings UI; research device heuristics + Vitest.
+Resume checklist:
+1. cd repo root → npm start (or start:athena / start:swift as needed); cd web && npm run dev → http://localhost:3001
+2. Concert route: /concert — classic scenes keys 1–9,0; audio-reactive scenes ⌥1–⌥0 (Alt+1–0). AR uses Csound RMS from concertAudioMeter.ts; with simulator on, ConcertVisualizer blends band-sync pseudo-RMS when audio is silent (simAudioReactive prop).
+3. Performance presets: Concert → Share performance preset JSON (neurovis-performance-preset); presets.ts is separate (OSC/DSP/ranges).
+4. Dual-source / Amy workflow: docs/CONCERT-SONIFICATION-DUAL-SOURCE.md §§10–12; quickstart docs/QUICKSTART-LAUNCH-PAIR-PLAY.md
+
+Deep refs if touching EEG/UI: web/lib/store.ts, web/lib/useWebSocket.ts, web/lib/clientSim.ts, web/lib/simulator.ts, web/components/charts/BandTracesChart.tsx, web/lib/bandFilters.ts, scripts/athena_ble_bridge.py (Athena BLE).
+
+What exists: Dual BLE backends (Swift default, Python Athena for Muse S Athena 273e0013) with Settings/API bridge switch; browser sim + ingest band traces; Concert with 10 classic + 10 AR modes; Csound V12 on concert page with analyser tap for AR; Mind Monitor OSC compatibility paths on server; research capture docs.
 
 Constraints: Match existing patterns; keep diffs focused; do not expand scope beyond what I ask.
 
@@ -125,4 +161,4 @@ My next task: [describe your task here]
 
 ---
 
-*Last updated: 2026-04-26 — BLE backends, Athena bridge hardening; research/capture docs and dual-source concert note added.*
+*Last updated: 2026-04-26 — BLE backends; concert AR modes (⌥1–⌥0), concertAudioMeter + simulator blend; HANDOFF session checkpoint + continuation prompt.*
